@@ -6,6 +6,8 @@ import org.booklore.model.dto.settings.CoverCroppingSettings;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.service.appsettings.AppSettingService;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -307,6 +309,7 @@ class FileServiceTest {
         @DisplayName("findSystemFile")
         class FindSystemFileTest {
             @Test
+            @EnabledOnOs(OS.LINUX)
             void searchesLocalBinFolderFirst() {
                 Path expected = Path.of("bin/example").toAbsolutePath().normalize();
 
@@ -322,6 +325,7 @@ class FileServiceTest {
             }
 
             @Test
+            @EnabledOnOs(OS.LINUX)
             void searchesAppDataToolsFolder() {
                 Path expected = tempDir.resolve("tools", "example");
 

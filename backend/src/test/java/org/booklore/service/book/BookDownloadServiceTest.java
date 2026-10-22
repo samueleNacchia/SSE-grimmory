@@ -10,6 +10,8 @@ import org.booklore.service.kobo.KepubConversionService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -53,6 +55,7 @@ public class BookDownloadServiceTest {
     }
 
     @Test
+    @EnabledOnOs(OS.LINUX)
     public void downloadBook_includesContentDispositionAscii() {
         String expected = "attachment; filename=\"example.epub\"";
 
@@ -70,6 +73,7 @@ public class BookDownloadServiceTest {
     }
 
     @Test
+    @EnabledOnOs(OS.LINUX)
     public void downloadBook_includesContentDispositionUTF8() {
         String expected = "attachment; filename=\"_xample.epub\"; filename*=UTF-8''%C9%87xample.epub";
 

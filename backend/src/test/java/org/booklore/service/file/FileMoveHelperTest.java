@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
@@ -342,6 +344,7 @@ class FileMoveHelperTest {
 
         @Test
         @DisplayName("deleteEmptyParentDirs handles symlinks safely")
+        @EnabledOnOs(OS.LINUX)
         void deleteEmptyParentDirs_handlesSymlinks() throws Exception {
             Path libraryRoot = tempDir.resolve("library");
             Path realDir = tempDir.resolve("realdir");

@@ -8,6 +8,8 @@ import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.LibraryOrganizationMode;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.InjectMocks;
@@ -63,6 +65,7 @@ class LibraryFileHelperTest {
                 .map(LibraryFile::getFullPath)
                 .map(p -> tempDir.relativize(p))
                 .map(Path::toString)
+                .map(s -> s.replace('\\', '/'))
                 .sorted()
                 .toList();
 
@@ -75,6 +78,7 @@ class LibraryFileHelperTest {
     }
 
     @Test
+    @EnabledOnOs(OS.LINUX)
     void testGetLibraryFiles_HandlesInaccessibleDirectories() throws IOException {
         Files.write(tempDir.resolve("happy.epub"), new byte[]{1});
         Files.createDirectory(tempDir.resolve("some_other_random_named_dir"), PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("---------")));

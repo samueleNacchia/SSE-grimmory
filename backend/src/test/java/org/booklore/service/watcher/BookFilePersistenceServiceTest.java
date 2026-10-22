@@ -97,7 +97,9 @@ class BookFilePersistenceServiceTest {
         void matchesFileUnderLibraryPath() {
             String result = service.findMatchingLibraryPath(library, Path.of("/library/sub/test.epub"));
 
-            assertThat(result).isEqualTo("/library");
+            String expected = Path.of("/library").toAbsolutePath().toString();
+
+            assertThat(result).isEqualTo(expected);
         }
 
         @Test
@@ -110,7 +112,9 @@ class BookFilePersistenceServiceTest {
         void matchesDeeperNestedFile() {
             String result = service.findMatchingLibraryPath(library, Path.of("/library/a/b/c/test.epub"));
 
-            assertThat(result).isEqualTo("/library");
+            String expected = Path.of("/library").toAbsolutePath().toString();
+
+            assertThat(result).isEqualTo(expected);
         }
     }
 
