@@ -62,3 +62,4 @@ backend/src/main/resources/application-local.yaml
 deploy/compose/data/*
 deploy/compose/config/*
 deploy/compose/books/*
+see-results/results/*
