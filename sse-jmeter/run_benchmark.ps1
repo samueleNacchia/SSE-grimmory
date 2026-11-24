@@ -5,8 +5,8 @@ param(
     [int]$Loops = 20,
     [int]$CooldownSeconds = 30,
     [int]$StartupTimeoutSeconds = 900,
-    [int]$PollIntervalSeconds = 30,
-    [int]$RampUpSeconds = 10,
+    [int]$PollIntervalSeconds = 60,
+    [int]$RampUpSeconds = 15,
     [string]$BaseUrl = "http://localhost:6060",
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$ComposeFile = (Join-Path $PSScriptRoot "docker-compose.bench.yml"),
@@ -14,8 +14,8 @@ param(
     [string]$JmxPath = (Join-Path $PSScriptRoot "baseline_books.jmx"),
     [string]$ResultsDir = (Join-Path $PSScriptRoot "results"),
     [string]$AnalyzeScript = (Join-Path $PSScriptRoot "analyze_results.py"),
-    [string]$EnergiBridgeExe = "C:\Files\energibridge\energibridge.exe",
-    [string]$JMeterBat = "C:\Developing\JMeter\apache-jmeter-5.6.3\apache-jmeter-5.6.3\bin\jmeter.bat",
+    [string]$EnergiBridgeExe = "C:\Users\Luigi Nacchia\GitHub\EnergiBridge\target\release\energibridge.exe",
+    [string]$JMeterBat = "C:\Program Files\Apache\Jmeter\apache-jmeter-5.6.3\bin\jmeter.bat",
     [switch]$ResetDocker,
     [switch]$ForceRebuild,
     [switch]$ResetAndSeed,
@@ -304,6 +304,13 @@ if (-not $SkipWarmup) {
     Start-Sleep -Seconds $CooldownSeconds
 }
 
+if (-not (Get-Service -Name "rapl" -ErrorAction SilentlyContinue)) {
+    Write-Warning "Il servizio 'rapl' di energibridge non è installato. Script interrotto."
+    exit 1
+}
+Write-Host "Starting EnergyBridge service (rapl)"
+sc.exe start rapl
+
 for ($i = 1; $i -le $Runs; $i++) {
     $loginResponse = Invoke-RestMethod -Uri "$BaseUrl/api/v1/auth/login" -Method POST -ContentType "application/json" -Body $loginBody
     $token = $loginResponse.accessToken
@@ -315,6 +322,8 @@ for ($i = 1; $i -le $Runs; $i++) {
     Write-Host "`n--- Run $i di $Runs [$Phase] ---" -ForegroundColor Magenta
     Write-Host "Output EnergiBridge: $ebCsv"
     Write-Host "Output JMeter:       $jmJtl"
+
+
 
     & $EnergiBridgeExe --interval 200 --output $ebCsv --summary `
         $JMeterBat -n -t $JmxPath "-Jjwt_token=$token" @jmeterTargetArgs @jmeterLoadArgs -l $jmJtl
@@ -334,7 +343,56 @@ for ($i = 1; $i -le $Runs; $i++) {
     }
 }
 
-Write-Host "`n=== Benchmark '$Phase' completato! Avvio analisi automatica... ===" -ForegroundColor Green
+
+Write-Host "`n=== Benchmark '$Phase' completato! Avvio configurazione ambiente Python... ===" -ForegroundColor Green
+
+# Directory dell'ambiente virtuale locale
+$VenvPath = Join-Path $PSScriptRoot ".venv"
+
+# Creazione ambiente virtuale se non esiste
+if (-not (Test-Path -LiteralPath $VenvPath -PathType Container)) {
+    Write-Host "`n[1/4] Creazione ambiente virtuale Python..." -ForegroundColor Cyan
+    python -m venv $VenvPath
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERRORE: impossibile creare il virtual environment." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Attivazione ambiente virtuale
+Write-Host "`n[2/4] Attivazione ambiente virtuale..." -ForegroundColor Cyan
+
+$ActivateScript = Join-Path $VenvPath "Scripts\Activate.ps1"
+. $ActivateScript
+
+# Aggiornamento pip
+Write-Host "`n[3/4] Aggiornamento pip e installazione dipendenze..." -ForegroundColor Cyan
+
+python -m pip install --upgrade pip
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERRORE durante l'aggiornamento di pip." -ForegroundColor Red
+    exit 1
+}
+
+# Installazione dipendenze
+python -m pip install pandas numpy
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERRORE durante l'installazione delle dipendenze." -ForegroundColor Red
+    exit 1
+}
+
+# Esecuzione script di analisi
+Write-Host "`n[4/4] Avvio analisi automatica..." -ForegroundColor Green
+
 if (Test-Path -LiteralPath $AnalyzeScript -PathType Leaf) {
     python $AnalyzeScript
+    Remove-Item -Path ".\results\*"
+
+}
+else {
+    Write-Host "ERRORE: script di analisi non trovato: $AnalyzeScript" -ForegroundColor Red
+    exit 1
 }

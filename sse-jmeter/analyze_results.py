@@ -274,7 +274,7 @@ def print_summary(df: pd.DataFrame, results_dir: str = RESULTS_DIR):
                     print(f"  {label:<32}: {b_med:10.2f} -> {o_med:10.2f}  ({delta_pct:+.2f}%)")
 
     # Esporta tabella riepilogativa in CSV per il report/paper
-    out_csv = os.path.join(results_dir, "summary_analysis.csv")
+    out_csv = os.path.join(results_dir, "..\summary_analysis.csv")
     df.to_csv(out_csv, index=False)
     print(f"\nTabella completa esportata in: {out_csv}\n")
 

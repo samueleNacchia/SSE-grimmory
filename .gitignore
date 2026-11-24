@@ -58,8 +58,12 @@ backend/src/main/resources/application-local.yaml
 /.angular/
 .worktrees/
 
+### others ###
 .env
+.venv
+.log
 deploy/compose/data/*
 deploy/compose/config/*
 deploy/compose/books/*
-see-results/results/*
+sse-jmeter/results
+!summary_analysis.csv
