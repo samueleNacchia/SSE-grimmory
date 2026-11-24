@@ -57,3 +57,8 @@ backend/src/main/resources/application-local.yaml
 /.pnpm-store/
 /.angular/
 .worktrees/
+
+.env
+deploy/compose/data/*
+deploy/compose/config/*
+deploy/compose/books/*

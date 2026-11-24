@@ -1,3 +1,4 @@
+name: grimmory-developing
 services:
   backend:
     build:

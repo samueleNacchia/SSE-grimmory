@@ -1,3 +1,4 @@
+name: grimmory-deploy
 services:
   # Upgrade path from Booklore:
   # Keep your existing service name, container_name, database names/users, ports,
