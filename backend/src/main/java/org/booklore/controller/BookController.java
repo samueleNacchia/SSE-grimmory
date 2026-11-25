@@ -1,11 +1,15 @@
 package org.booklore.controller;
 
 import org.booklore.browse.BrowsePage;
+import org.booklore.config.BookCacheEvictionListener;
+import org.booklore.config.CacheConfig;
 import org.booklore.config.security.annotation.CheckBookAccess;
+import org.booklore.config.security.service.AuthenticationService;
 import org.booklore.exception.ApiError;
 import org.booklore.model.dto.Book;
 import org.booklore.model.dto.BookRecommendation;
 import org.booklore.model.dto.BookViewerSettings;
+import org.booklore.model.dto.browse.FacetGroupsResponse;
 import org.booklore.model.dto.request.AttachBookFileRequest;
 import org.booklore.model.dto.request.CreatePhysicalBookRequest;
 import org.booklore.model.dto.request.DuplicateDetectionRequest;
@@ -26,33 +30,41 @@ import org.booklore.service.book.DuplicateDetectionService;
 import org.booklore.service.book.PhysicalBookService;
 import org.booklore.service.browse.BookBrowseService;
 import org.booklore.service.browse.BookFacetService;
-import org.booklore.model.dto.browse.FacetGroupsResponse;
 import org.booklore.service.metadata.BookMetadataService;
 import org.booklore.service.progress.ReadingProgressService;
 import org.booklore.service.recommender.BookRecommendationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.core.io.Resource;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import tools.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
+import java.io.ByteArrayOutputStream;
+import java.util.zip.GZIPOutputStream;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
-import java.io.IOException;
 
 @Tag(name = "Books", description = "Endpoints for managing books, their metadata, progress, and recommendations")
 @RequestMapping("/api/v1/books")
@@ -71,16 +83,75 @@ public class BookController {
     private final ReadingProgressService readingProgressService;
     private final PhysicalBookService physicalBookService;
     private final DuplicateDetectionService duplicateDetectionService;
+    private final ObjectMapper objectMapper;
+    private final CacheManager cacheManager;
+    private final AuthenticationService authenticationService;
+
+    private record CachedJsonResponse(byte[] plainBody, byte[] gzipBody, String eTag) {}
+
+    private static byte[] compressGzip(byte[] data) throws IOException {
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream(data.length / 4);
+             GZIPOutputStream gzipOut = new GZIPOutputStream(baos)) {
+            gzipOut.write(data);
+            gzipOut.finish();
+            return baos.toByteArray();
+        }
+    }
 
     @Operation(summary = "Get all books", description = "Retrieve a list of all books. Optionally include descriptions.")
     @ApiResponse(responseCode = "200", description = "List of books returned successfully")
-    @GetMapping
-    public ResponseEntity<List<Book>> getBooks(
+    @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<byte[]> getBooks(
             @Parameter(description = "Include book descriptions in the response")
             @RequestParam(required = false, defaultValue = "false") boolean withDescription,
             @Parameter(description = "Remove other metadata fields from the response")
-            @RequestParam(required = false, defaultValue = "true") boolean stripForListView) {
-        return ResponseEntity.ok(bookService.getBookDTOs(withDescription, stripForListView));
+            @RequestParam(required = false, defaultValue = "true") boolean stripForListView,
+            @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch,
+            @RequestHeader(value = HttpHeaders.ACCEPT_ENCODING, required = false) String acceptEncoding) throws Exception {
+
+        Long userId = authenticationService.getAuthenticatedUser().getId();
+        String cacheKey = "USER_" + userId + "_" + withDescription + "_" + stripForListView;
+
+        Cache jsonCache = cacheManager.getCache(CacheConfig.BOOKS_LIST_VIEW_JSON_CACHE);
+        CachedJsonResponse cached = jsonCache != null ? jsonCache.get(cacheKey, CachedJsonResponse.class) : null;
+
+        if (cached == null) {
+            List<Book> books = bookService.getBookDTOs(withDescription, stripForListView);
+            byte[] jsonBytes = objectMapper.writeValueAsBytes(books);
+            byte[] gzipBytes = compressGzip(jsonBytes);
+            String eTag = "\"books-" + Integer.toHexString(Arrays.hashCode(jsonBytes)) + "\"";
+            cached = new CachedJsonResponse(jsonBytes, gzipBytes, eTag);
+            if (jsonCache != null) {
+                jsonCache.put(cacheKey, cached);
+            }
+        }
+
+        if (ifNoneMatch != null && ifNoneMatch.equals(cached.eTag())) {
+            return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                    .eTag(cached.eTag())
+                    .cacheControl(CacheControl.noCache().mustRevalidate())
+                    .build();
+        }
+
+        boolean supportsGzip = acceptEncoding != null && acceptEncoding.toLowerCase().contains("gzip");
+        if (supportsGzip) {
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .header(HttpHeaders.CONTENT_ENCODING, "gzip")
+                    .header(HttpHeaders.VARY, HttpHeaders.ACCEPT_ENCODING)
+                    .contentLength(cached.gzipBody().length)
+                    .eTag(cached.eTag())
+                    .cacheControl(CacheControl.noCache().mustRevalidate())
+                    .body(cached.gzipBody());
+        }
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_JSON)
+                .header(HttpHeaders.VARY, HttpHeaders.ACCEPT_ENCODING)
+                .contentLength(cached.plainBody().length)
+                .eTag(cached.eTag())
+                .cacheControl(CacheControl.noCache().mustRevalidate())
+                .body(cached.plainBody());
     }
 
     @Operation(summary = "Get books (paginated)", description = "Retrieve a page of books. Supports cursor pagination plus sort, facet, facet_logic, and query parameters; with none of these the legacy page/size behavior is preserved.")
@@ -208,8 +279,7 @@ public class BookController {
     @CheckBookAccess(bookIdParam = "bookId")
     public ResponseEntity<Resource> getBookContent(
             @Parameter(description = "ID of the book") @PathVariable long bookId,
-            @Parameter(description = "Optional book type for alternative format (e.g., EPUB, PDF, MOBI)") @RequestParam(required = false) String bookType
-            ) {
+            @Parameter(description = "Optional book type for alternative format (e.g., EPUB, PDF, MOBI)") @RequestParam(required = false) String bookType) {
         return bookService.getBookContent(bookId, bookType);
     }
 
@@ -281,7 +351,9 @@ public class BookController {
     @PostMapping("/shelves")
     public ResponseEntity<List<Book>> addBookToShelf(
             @Parameter(description = "Shelves assignment request") @RequestBody @Valid ShelvesAssignmentRequest request) {
-        return ResponseEntity.ok(bookService.assignShelvesToBooks(request.getBookIds(), request.getShelvesToAssign(), request.getShelvesToUnassign()));
+        List<Book> result = bookService.assignShelvesToBooks(request.getBookIds(), request.getShelvesToAssign(), request.getShelvesToUnassign());
+        BookCacheEvictionListener.evictBooksListView();
+        return ResponseEntity.ok(result);
     }
 
     @Operation(summary = "Update read progress", description = "Update the read progress for a book.")
@@ -290,6 +362,7 @@ public class BookController {
     public ResponseEntity<Void> addBookToProgress(
             @Parameter(description = "Read progress request") @RequestBody @Valid ReadProgressRequest request) {
         bookService.updateReadProgress(request);
+        BookCacheEvictionListener.evictBooksListView();
         return ResponseEntity.noContent().build();
     }
 
@@ -307,7 +380,9 @@ public class BookController {
     @ApiResponse(responseCode = "200", description = "Read status updated successfully")
     @PostMapping("/status")
     public List<BookStatusUpdateResponse> updateReadStatus(@RequestBody @Valid ReadStatusUpdateRequest request) {
-        return bookService.updateReadStatus(request.getBookIds(), request.getStatus());
+        List<BookStatusUpdateResponse> result = bookService.updateReadStatus(request.getBookIds(), request.getStatus());
+        BookCacheEvictionListener.evictBooksListView();
+        return result;
     }
 
     @Operation(summary = "Reset reading progress", description = "Reset the reading progress for one or more books.")
@@ -322,7 +397,9 @@ public class BookController {
         if (bookIds == null || bookIds.isEmpty()) {
             throw ApiError.GENERIC_BAD_REQUEST.createException("No book IDs provided");
         }
-        return ResponseEntity.ok(readingProgressService.resetProgress(bookIds, type));
+        List<BookStatusUpdateResponse> result = readingProgressService.resetProgress(bookIds, type);
+        BookCacheEvictionListener.evictBooksListView();
+        return ResponseEntity.ok(result);
     }
 
     @Operation(summary = "Update personal rating", description = "Update the personal rating for one or more books.")
@@ -330,7 +407,9 @@ public class BookController {
     @PutMapping("/personal-rating")
     public ResponseEntity<List<PersonalRatingUpdateResponse>> updatePersonalRating(
             @Parameter(description = "Personal rating update request") @RequestBody @Valid PersonalRatingUpdateRequest request) {
-        return ResponseEntity.ok(bookUpdateService.updatePersonalRating(request.ids(), request.rating()));
+        List<PersonalRatingUpdateResponse> result = bookUpdateService.updatePersonalRating(request.ids(), request.rating());
+        BookCacheEvictionListener.evictBooksListView();
+        return ResponseEntity.ok(result);
     }
 
     @Operation(summary = "Reset personal rating", description = "Reset the personal rating for one or more books.")
@@ -345,6 +424,7 @@ public class BookController {
             throw ApiError.GENERIC_BAD_REQUEST.createException("No book IDs provided");
         }
         List<PersonalRatingUpdateResponse> updatedBooks = bookUpdateService.resetPersonalRating(bookIds);
+        BookCacheEvictionListener.evictBooksListView();
         return ResponseEntity.ok(updatedBooks);
     }
 

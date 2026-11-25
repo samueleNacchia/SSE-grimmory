@@ -5,6 +5,7 @@ import org.booklore.app.specification.AppBookSpecification;
 import org.booklore.mapper.v2.BookMapperV2;
 import org.booklore.model.dto.Book;
 import org.booklore.model.dto.BookMetadata;
+import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.dto.BookRecommendationLite;
 import org.booklore.model.dto.ComicMetadata;
 import org.booklore.model.entity.BookEntity;
@@ -13,6 +14,7 @@ import org.booklore.repository.UserContentRestrictionRepository;
 import org.booklore.security.policy.ContentRestrictionSpecification;
 import org.booklore.service.restriction.ContentRestrictionService;
 import org.booklore.util.BookUtils;
+import org.booklore.config.CacheConfig;
 import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -20,6 +22,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.cache.annotation.Cacheable;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -35,13 +38,39 @@ public class BookQueryService {
     private final ContentRestrictionService contentRestrictionService;
     private final UserContentRestrictionRepository restrictionRepository;
 
+    @Cacheable(
+            cacheNames = CacheConfig.BOOKS_LIST_VIEW_CACHE,
+            key = "'ALL_' + #includeDescription + '_' + #stripForListView"
+    )
     public List<Book> getAllBooks(boolean includeDescription, boolean stripForListView) {
-        List<BookEntity> books = bookRepository.findAllWithMetadata();
+        List<BookEntity> books;
+        if (stripForListView) {
+            books = bookRepository.findAllForListViewBase();
+            if (!books.isEmpty()) {
+                List<Long> ids = books.stream().map(BookEntity::getId).toList();
+                bookRepository.fetchMetadataCollectionsByBookIds(ids);
+            }
+        } else {
+            books = bookRepository.findAllWithMetadata();
+        }
         return mapBooksToDto(books, includeDescription, null, stripForListView);
     }
 
+    @Cacheable(
+            cacheNames = CacheConfig.BOOKS_LIST_VIEW_CACHE,
+            key = "'LIBS_' + #libraryIds.hashCode() + '_' + #userId + '_' + #includeDescription + '_' + #StripForListView"
+    )
     public List<Book> getAllBooksByLibraryIds(Set<Long> libraryIds, boolean includeDescription, boolean StripForListView, Long userId) {
-        List<BookEntity> books = bookRepository.findAllWithMetadataByLibraryIds(libraryIds);
+        List<BookEntity> books;
+        if (StripForListView) {
+            books = bookRepository.findAllForListViewBaseByLibraryIds(libraryIds);
+            if (!books.isEmpty()) {
+                List<Long> ids = books.stream().map(BookEntity::getId).toList();
+                bookRepository.fetchMetadataCollectionsByBookIds(ids);
+            }
+        } else {
+            books = bookRepository.findAllWithMetadataByLibraryIds(libraryIds);
+        }
         books = contentRestrictionService.applyRestrictions(books, userId);
         return mapBooksToDto(books, includeDescription, userId, StripForListView);
     }
@@ -165,7 +194,22 @@ public class BookQueryService {
     }
 
     private Book mapBookToDto(BookEntity bookEntity, boolean includeDescription, Long userId, boolean stripForListView) {
-        Book dto = bookMapperV2.toDTO(bookEntity);
+        if (stripForListView) {
+            Book dto = bookMapperV2.toListViewDTO(bookEntity, true);
+            BookMetadataEntity me = bookEntity.getMetadata();
+            if (dto.getMetadata() != null && me != null) {
+                if (includeDescription) {
+                    dto.getMetadata().setDescription(me.getDescription());
+                }
+                dto.getMetadata().setAllMetadataLocked(computeAllMetadataLockedFromEntity(me));
+            }
+            if (dto.getShelves() != null && userId != null) {
+                dto.setShelves(BookUtils.filterShelvesByUserId(dto.getShelves(), userId));
+            }
+            return dto;
+        }
+
+        Book dto = bookMapperV2.toDTO(bookEntity, false);
 
         if (includeDescription && dto.getMetadata() != null && bookEntity.getMetadata() != null) {
             dto.getMetadata().setDescription(bookEntity.getMetadata().getDescription());
@@ -175,11 +219,56 @@ public class BookQueryService {
             dto.setShelves(BookUtils.filterShelvesByUserId(dto.getShelves(), userId));
         }
 
-        if (stripForListView) {
-            stripFieldsForListView(dto);
-        }
-
         return dto;
+    }
+
+    private boolean computeAllMetadataLockedFromEntity(BookMetadataEntity m) {
+        return Boolean.TRUE.equals(m.getTitleLocked())
+                && Boolean.TRUE.equals(m.getSubtitleLocked())
+                && Boolean.TRUE.equals(m.getPublisherLocked())
+                && Boolean.TRUE.equals(m.getPublishedDateLocked())
+                && Boolean.TRUE.equals(m.getDescriptionLocked())
+                && Boolean.TRUE.equals(m.getSeriesNameLocked())
+                && Boolean.TRUE.equals(m.getSeriesNumberLocked())
+                && Boolean.TRUE.equals(m.getSeriesTotalLocked())
+                && Boolean.TRUE.equals(m.getIsbn13Locked())
+                && Boolean.TRUE.equals(m.getIsbn10Locked())
+                && Boolean.TRUE.equals(m.getOpenlibraryIdLocked())
+                && Boolean.TRUE.equals(m.getAsinLocked())
+                && Boolean.TRUE.equals(m.getGoodreadsIdLocked())
+                && Boolean.TRUE.equals(m.getComicvineIdLocked())
+                && Boolean.TRUE.equals(m.getHardcoverIdLocked())
+                && Boolean.TRUE.equals(m.getHardcoverBookIdLocked())
+                && Boolean.TRUE.equals(m.getGoogleIdLocked())
+                && Boolean.TRUE.equals(m.getPageCountLocked())
+                && Boolean.TRUE.equals(m.getLanguageLocked())
+                && Boolean.TRUE.equals(m.getAmazonRatingLocked())
+                && Boolean.TRUE.equals(m.getAmazonReviewCountLocked())
+                && Boolean.TRUE.equals(m.getGoodreadsRatingLocked())
+                && Boolean.TRUE.equals(m.getGoodreadsReviewCountLocked())
+                && Boolean.TRUE.equals(m.getHardcoverRatingLocked())
+                && Boolean.TRUE.equals(m.getHardcoverReviewCountLocked())
+                && Boolean.TRUE.equals(m.getLubimyczytacIdLocked())
+                && Boolean.TRUE.equals(m.getLubimyczytacRatingLocked())
+                && Boolean.TRUE.equals(m.getRanobedbIdLocked())
+                && Boolean.TRUE.equals(m.getRanobedbRatingLocked())
+                && Boolean.TRUE.equals(m.getAudibleIdLocked())
+                && Boolean.TRUE.equals(m.getAudibleRatingLocked())
+                && Boolean.TRUE.equals(m.getAudibleReviewCountLocked())
+                && Boolean.TRUE.equals(m.getApplebooksIdLocked())
+                && Boolean.TRUE.equals(m.getApplebooksRatingLocked())
+                && Boolean.TRUE.equals(m.getApplebooksReviewCountLocked())
+                && Boolean.TRUE.equals(m.getCoverLocked())
+                && Boolean.TRUE.equals(m.getAudiobookCoverLocked())
+                && Boolean.TRUE.equals(m.getAuthorsLocked())
+                && Boolean.TRUE.equals(m.getCategoriesLocked())
+                && Boolean.TRUE.equals(m.getMoodsLocked())
+                && Boolean.TRUE.equals(m.getTagsLocked())
+                && Boolean.TRUE.equals(m.getReviewsLocked())
+                && Boolean.TRUE.equals(m.getNarratorLocked())
+                && Boolean.TRUE.equals(m.getAbridgedLocked())
+                && Boolean.TRUE.equals(m.getAgeRatingLocked())
+                && Boolean.TRUE.equals(m.getContentRatingLocked());
     }
 
     private void stripFieldsForListView(Book dto) {
