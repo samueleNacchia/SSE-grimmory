@@ -1,13 +1,44 @@
 import os
 import re
 import statistics
+from datetime import datetime
 import pandas as pd
 import numpy as np
 
-RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_DIR = os.path.join(SCRIPT_DIR, "results")
+RUNS_HISTORY_CSV = os.path.join(SCRIPT_DIR, "runs_history.csv")
+SUMMARY_CSV = os.path.join(SCRIPT_DIR, "summary_analysis.csv")
 
-# Pattern nome file: eb_<phase>_run<N>_<timestamp>.csv e jm_<phase>_run<N>_<timestamp>.jtl
-FILENAME_RE = re.compile(r"^(eb|jm)_([a-zA-Z0-9_-]+)_run(\d+)_(\d{8}_\d{6}(?:_\d{3})?)\.(csv|jtl)$")
+KNOWN_TEST_TYPES = {"load", "stress", "spike", "soak"}
+
+# Supporta:
+# - eb_<phase>_<test_type>_run<N>_<timestamp>.csv (es. eb_optimized_v3_stress_run1_20261125_120000_000.csv)
+# - eb_<phase>_run<N>_<timestamp>.csv (retrocompatibilità, test_type="load")
+FILENAME_RE = re.compile(
+    r"^(eb|jm)_([a-zA-Z0-9_-]+)_run(\d+)_(\d{8}_\d{6}(?:_\d{3})?)\.(csv|jtl)$"
+)
+
+METRICS_LABELS = [
+    ("total_energy_j", "Energia Totale (J)"),
+    ("energy_per_req_mj", "Energia / Richiesta OK (mJ)"),
+    ("avg_power_w", "Potenza Media (W)"),
+    ("duration_s", "Durata Run (s)"),
+    ("throughput_rps", "Throughput (req/s)"),
+    ("latency_mean_ms", "Latenza Media (ms)"),
+    ("latency_median_ms", "Latenza Mediana (ms)"),
+    ("latency_p95_ms", "Latenza p95 (ms)"),
+    ("latency_p99_ms", "Latenza p99 (ms)"),
+    ("avg_bytes", "Dimensione Media Risposta (B)"),
+]
+
+
+def _split_phase_and_test_type(raw_tag: str) -> tuple[str, str]:
+    """Separa phase e test_type gestendo anche fasi con underscore (es. optimized_v3_stress)."""
+    parts = raw_tag.rsplit("_", 1)
+    if len(parts) == 2 and parts[1].lower() in KNOWN_TEST_TYPES:
+        return parts[0], parts[1].lower()
+    return raw_tag, "load"
 
 
 def _energybridge_duration(df: pd.DataFrame, time_col: str, sample_interval_s: float) -> float:
@@ -30,7 +61,6 @@ def _energybridge_duration(df: pd.DataFrame, time_col: str, sample_interval_s: f
         if re.search(r"\b(ms|milliseconds?)\b", normalized_name) or numeric.abs().max() >= 1e11:
             return span / 1000.0
 
-        # Inferenza basata sul passo mediano di campionamento (es. 200 ms -> step ~ 200)
         step = float(np.median(np.diff(numeric)))
         if step >= 10_000:
             return span / 1_000_000.0
@@ -71,7 +101,6 @@ def parse_energibridge(filepath: str, sample_interval_s: float = 0.2) -> dict:
     energy_found = False
 
     if energy_cols:
-        # Priorità a PACKAGE_ENERGY o CPU_ENERGY come energia primaria
         primary_col = next(
             (c for c in energy_cols if "PACKAGE" in c.upper()),
             next((c for c in energy_cols if "CPU" in c.upper()), energy_cols[0]),
@@ -161,31 +190,41 @@ def parse_jmeter(filepath: str) -> dict:
     }
 
 
-def collect_runs(results_dir: str) -> pd.DataFrame:
-    if not os.path.isdir(results_dir):
-        raise FileNotFoundError(f"Cartella risultati non trovata: {results_dir}")
+def collect_runs(results_dir: str, history_csv: str = RUNS_HISTORY_CSV) -> pd.DataFrame:
+    existing_df = pd.DataFrame()
+    if os.path.isfile(history_csv):
+        existing_df = pd.read_csv(history_csv)
+        if not existing_df.empty and "test_type" not in existing_df.columns:
+            existing_df["test_type"] = "load"
 
     grouped = {}
-    for fname in sorted(os.listdir(results_dir)):
-        match = FILENAME_RE.match(fname)
-        if not match:
-            continue
-        kind, phase, run_num, ts, _ = match.groups()
-        key = (phase, int(run_num))
-        if kind in grouped.get(key, {}):
-            raise ValueError(
-                f"File duplicato per fase='{phase}', run={run_num}: '{fname}'. "
-                "Sposta o elimina i risultati delle campagne precedenti prima di rieseguire."
-            )
-        grouped.setdefault(key, {})[kind] = os.path.join(results_dir, fname)
-        grouped[key].setdefault("timestamp", ts)
+    if os.path.isdir(results_dir):
+        for fname in sorted(os.listdir(results_dir)):
+            match = FILENAME_RE.match(fname)
+            if not match:
+                continue
+            kind, raw_tag, run_num, ts, _ = match.groups()
+            phase, test_type = _split_phase_and_test_type(raw_tag)
+            key = (phase, test_type, int(run_num))
+            if kind in grouped.get(key, {}):
+                raise ValueError(
+                    f"File duplicato per fase='{phase}', test='{test_type}', run={run_num}: '{fname}'. "
+                    "Sposta o elimina i risultati delle campagne precedenti prima di rieseguire."
+                )
+            grouped.setdefault(key, {})[kind] = os.path.join(results_dir, fname)
+            grouped[key].setdefault("timestamp", ts)
 
     rows = []
-    for (phase, run_num), files in sorted(grouped.items()):
+    for (phase, test_type, run_num), files in sorted(grouped.items()):
         if "eb" not in files or "jm" not in files:
             missing = "EnergiBridge" if "eb" not in files else "JMeter"
-            print(f"ATTENZIONE: run {phase}/run{run_num} senza file {missing}; metriche parziali.")
-        row = {"phase": phase, "run": run_num, "timestamp": files.get("timestamp", "")}
+            print(f"ATTENZIONE: run {phase}/{test_type}/run{run_num} senza file {missing}; metriche parziali.")
+        row = {
+            "phase": phase,
+            "test_type": test_type,
+            "run": run_num,
+            "timestamp": files.get("timestamp", ""),
+        }
         if "eb" in files:
             row.update(parse_energibridge(files["eb"]))
         if "jm" in files:
@@ -202,12 +241,90 @@ def collect_runs(results_dir: str) -> pd.DataFrame:
 
         rows.append(row)
 
-    return pd.DataFrame(rows)
+    new_df = pd.DataFrame(rows)
+
+    if new_df.empty:
+        return existing_df
+    if existing_df.empty:
+        return new_df
+
+    # Sostituisci nello storico interno le combinazioni (phase, test_type) appena rieseguite
+    updated_pairs = set(zip(new_df["phase"], new_df["test_type"]))
+    mask = existing_df.apply(lambda r: (r["phase"], r["test_type"]) in updated_pairs, axis=1)
+    existing_df = existing_df[~mask]
+
+    combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+    return combined_df.sort_values(by=["phase", "test_type", "run"]).reset_index(drop=True)
 
 
-def print_summary(df: pd.DataFrame, results_dir: str = RESULTS_DIR):
+def build_aggregated_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Costruisce 1 riga elaborata per ogni coppia (phase, test_type) con mediane, medie, std e delta% vs baseline."""
+    agg_rows = []
+    baseline_medians = {}
+
+    # Prima passata: calcola statistiche per ogni (phase, test_type)
+    for (phase, test_type), group in df.groupby(["phase", "test_type"], sort=True):
+        row = {
+            "phase": phase,
+            "test_type": test_type,
+            "runs": int(len(group)),
+            "requests_median": float(group["requests"].median()) if "requests" in group.columns else np.nan,
+            "error_rate_pct_mean": float(group["error_rate_pct"].mean()) if "error_rate_pct" in group.columns else 0.0,
+        }
+        if phase == "baseline":
+            baseline_medians[test_type] = {}
+
+        for col, _ in METRICS_LABELS:
+            if col not in group.columns:
+                continue
+            vals = group[col].dropna().tolist()
+            if not vals:
+                continue
+            med_v = float(statistics.median(vals))
+            mean_v = float(statistics.mean(vals))
+            std_v = float(statistics.stdev(vals)) if len(vals) > 1 else 0.0
+
+            row[f"{col}_median"] = round(med_v, 4)
+            row[f"{col}_mean"] = round(mean_v, 4)
+            row[f"{col}_std"] = round(std_v, 4)
+
+            if phase == "baseline":
+                baseline_medians[test_type][col] = med_v
+
+        agg_rows.append(row)
+
+    # Seconda passata: calcola i delta% sulle mediane rispetto alla baseline dello stesso test_type
+    for row in agg_rows:
+        phase = row["phase"]
+        test_type = row["test_type"]
+        b_meds = baseline_medians.get(test_type, {})
+        for col, _ in METRICS_LABELS:
+            med_key = f"{col}_median"
+            delta_key = f"{col}_delta_pct"
+            if phase == "baseline" or med_key not in row or col not in b_meds:
+                row[delta_key] = 0.0 if phase == "baseline" else np.nan
+            else:
+                b_val = b_meds[col]
+                t_val = row[med_key]
+                row[delta_key] = round(((t_val - b_val) / b_val) * 100.0, 2) if b_val != 0 else np.nan
+
+    return pd.DataFrame(agg_rows)
+
+
+def _save_csv_with_fallback(df: pd.DataFrame, target_path: str, label: str):
+    try:
+        df.to_csv(target_path, index=False)
+        print(f"{label} esportato in: {target_path}")
+    except PermissionError:
+        base, ext = os.path.splitext(target_path)
+        fallback_path = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+        df.to_csv(fallback_path, index=False)
+        print(f"[!] '{target_path}' è aperto in un altro programma. Esportato in: {fallback_path}")
+
+
+def print_summary(df: pd.DataFrame, summary_csv: str = SUMMARY_CSV, history_csv: str = RUNS_HISTORY_CSV):
     if df.empty:
-        print("Nessun file eb_*.csv o jm_*.jtl trovato nella cartella results.")
+        print("Nessun file eb_*.csv o jm_*.jtl trovato nella cartella results e nessuno storico presente.")
         return
 
     print("\n" + "=" * 80)
@@ -215,7 +332,7 @@ def print_summary(df: pd.DataFrame, results_dir: str = RESULTS_DIR):
     print("=" * 80)
     cols_to_show = [
         c for c in [
-            "phase", "run", "requests", "error_rate_pct",
+            "phase", "test_type", "run", "requests", "error_rate_pct",
             "total_energy_j", "energy_per_req_mj", "avg_power_w",
             "throughput_rps", "latency_mean_ms", "latency_p95_ms"
         ] if c in df.columns
@@ -225,60 +342,52 @@ def print_summary(df: pd.DataFrame, results_dir: str = RESULTS_DIR):
     if "error_rate_pct" in df.columns and (df["error_rate_pct"] > 0).any():
         print("\n[!] ATTENZIONE: Alcune run presentano error_rate_pct > 0%. Verifica i log prima di confrontare.")
 
-    print("\n" + "=" * 80)
-    print("RIEPILOGO STATISTICO PER FASE (Media ± Dev.Std | Mediana)")
-    print("=" * 80)
+    # Raggruppamento per scenario di test e fase
+    for test_type, t_group in df.groupby("test_type", sort=True):
+        print("\n" + "#" * 80)
+        print(f"SCENARIO DI TEST: {test_type.upper()}")
+        print("#" * 80)
 
-    metrics_labels = [
-        ("total_energy_j", "Energia Totale (J)"),
-        ("energy_per_req_mj", "Energia / Richiesta OK (mJ)"),
-        ("avg_power_w", "Potenza Media (W)"),
-        ("duration_s", "Durata Run (s)"),
-        ("throughput_rps", "Throughput (req/s)"),
-        ("latency_mean_ms", "Latenza Media (ms)"),
-        ("latency_median_ms", "Latenza Mediana (ms)"),
-        ("latency_p95_ms", "Latenza p95 (ms)"),
-        ("latency_p99_ms", "Latenza p99 (ms)"),
-        ("avg_bytes", "Dimensione Media Risposta (B)"),
-    ]
+        summary_by_phase = {}
+        for phase, group in t_group.groupby("phase", sort=True):
+            print(f"\n>>> FASE: {phase.upper()} [{test_type}] (n = {len(group)} run)")
+            summary_by_phase[phase] = {}
+            for col, label in METRICS_LABELS:
+                if col not in group.columns:
+                    continue
+                vals = group[col].dropna().tolist()
+                if not vals:
+                    continue
+                mean_v = statistics.mean(vals)
+                med_v = statistics.median(vals)
+                std_v = statistics.stdev(vals) if len(vals) > 1 else 0.0
+                summary_by_phase[phase][col] = (mean_v, med_v, std_v)
+                print(f"  {label:<32}: {mean_v:10.2f} ± {std_v:7.2f}  |  Mediana: {med_v:10.2f}")
 
-    summary_by_phase = {}
-    for phase, group in df.groupby("phase"):
-        print(f"\n>>> FASE: {phase.upper()} (n = {len(group)} run)")
-        summary_by_phase[phase] = {}
-        for col, label in metrics_labels:
-            if col not in group.columns:
-                continue
-            vals = group[col].dropna().tolist()
-            if not vals:
-                continue
-            mean_v = statistics.mean(vals)
-            med_v = statistics.median(vals)
-            std_v = statistics.stdev(vals) if len(vals) > 1 else 0.0
-            summary_by_phase[phase][col] = (mean_v, med_v, std_v)
-            print(f"  {label:<32}: {mean_v:10.2f} ± {std_v:7.2f}  |  Mediana: {med_v:10.2f}")
+        if "baseline" in summary_by_phase:
+            b_stats = summary_by_phase["baseline"]
+            other_phases = [p for p in summary_by_phase if p != "baseline"]
+            for target_phase in other_phases:
+                print("\n" + "=" * 80)
+                print(f"CONFRONTO [{test_type.upper()}] BASELINE vs {target_phase.upper()} (basato sulle mediane)")
+                print("=" * 80)
+                t_stats = summary_by_phase[target_phase]
+                for col, label in METRICS_LABELS:
+                    if col in b_stats and col in t_stats:
+                        b_med = b_stats[col][1]
+                        t_med = t_stats[col][1]
+                        if b_med != 0:
+                            delta_pct = ((t_med - b_med) / b_med) * 100.0
+                            print(f"  {label:<32}: {b_med:10.2f} -> {t_med:10.2f}  ({delta_pct:+.2f}%)")
 
-    # Confronto automatico Baseline vs Optimized se presenti entrambi
-    if "baseline" in summary_by_phase and "optimized" in summary_by_phase:
-        print("\n" + "=" * 80)
-        print("CONFRONTO BASELINE vs OPTIMIZED (basato sulle mediane)")
-        print("=" * 80)
-        b_stats = summary_by_phase["baseline"]
-        o_stats = summary_by_phase["optimized"]
-        for col, label in metrics_labels:
-            if col in b_stats and col in o_stats:
-                b_med = b_stats[col][1]
-                o_med = o_stats[col][1]
-                if b_med != 0:
-                    delta_pct = ((o_med - b_med) / b_med) * 100.0
-                    print(f"  {label:<32}: {b_med:10.2f} -> {o_med:10.2f}  ({delta_pct:+.2f}%)")
-
-    # Esporta tabella riepilogativa in CSV per il report/paper
-    out_csv = os.path.join(results_dir, "..\summary_analysis.csv")
-    df.to_csv(out_csv, index=False)
-    print(f"\nTabella completa esportata in: {out_csv}\n")
+    # Esporta sia lo storico delle singole run sia la tabella aggregata (1 riga per phase + test_type)
+    print("\n" + "-" * 80)
+    _save_csv_with_fallback(df, history_csv, "Storico singole run")
+    agg_df = build_aggregated_summary(df)
+    _save_csv_with_fallback(agg_df, summary_csv, "Summary elaborato (1 riga per fase/test)")
+    print("-" * 80 + "\n")
 
 
 if __name__ == "__main__":
-    results_df = collect_runs(RESULTS_DIR)
-    print_summary(results_df, RESULTS_DIR)
+    results_df = collect_runs(RESULTS_DIR, RUNS_HISTORY_CSV)
+    print_summary(results_df, SUMMARY_CSV, RUNS_HISTORY_CSV)

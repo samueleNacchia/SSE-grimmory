@@ -1,21 +1,20 @@
 param(
     [string]$Phase = "baseline",
-    [int]$Runs = 5,
-    [int]$Threads = 5,
-    [int]$Loops = 20,
+    [string[]]$TestType = @("all"),   # Valori: "all", oppure "load", "stress", "spike", "soak" (anche separati da virgola)
+    [string[]]$ExcludeTestType = @(),  # Es: "load" per eseguire tutti tranne load
+    [int]$Runs = 0,                    # 0 = usa i default per scenario (5 per load/stress/spike, 3 per soak)
     [int]$CooldownSeconds = 30,
     [int]$StartupTimeoutSeconds = 900,
     [int]$PollIntervalSeconds = 60,
-    [int]$RampUpSeconds = 15,
     [string]$BaseUrl = "http://localhost:6060",
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$ComposeFile = (Join-Path $PSScriptRoot "docker-compose.bench.yml"),
     [string]$SeedSqlPath = (Join-Path $PSScriptRoot "seed_book.sql"),
-    [string]$JmxPath = (Join-Path $PSScriptRoot "baseline_books.jmx"),
+    [string]$PlansDir = (Join-Path $PSScriptRoot "plans"),
     [string]$ResultsDir = (Join-Path $PSScriptRoot "results"),
     [string]$AnalyzeScript = (Join-Path $PSScriptRoot "analyze_results.py"),
-    [string]$EnergiBridgeExe = "C:\Users\Luigi Nacchia\GitHub\EnergiBridge\target\release\energibridge.exe",
-    [string]$JMeterBat = "C:\Program Files\Apache\Jmeter\apache-jmeter-5.6.3\bin\jmeter.bat",
+    [string]$EnergiBridgeExe = "C:\Developing\energibridge\energibridge.exe",
+    [string]$JMeterBat = "C:\Developing\JMeter\apache-jmeter-5.6.3\apache-jmeter-5.6.3\bin\jmeter.bat",
     [switch]$ResetDocker,
     [switch]$ForceRebuild,
     [switch]$ResetAndSeed,
@@ -26,19 +25,69 @@ param(
 $ErrorActionPreference = "Stop"
 $env:JVM_ARGS = "--sun-misc-unsafe-memory-access=allow"
 
-if ($Runs -lt 1) { throw "Runs deve essere almeno 1." }
-if ($Threads -lt 1) { throw "Threads deve essere almeno 1." }
-if ($Loops -lt 1) { throw "Loops deve essere almeno 1." }
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+)
+if (-not $isAdmin) {
+    throw "Esegui PowerShell come Amministratore: EnergiBridge (driver rapl) richiede privilegi elevati."
+}
+
+if ($Runs -lt 0) { throw "Runs non può essere negativo (usa 0 per i default per scenario)." }
 if ($CooldownSeconds -lt 0) { throw "CooldownSeconds non può essere negativo." }
 if ($StartupTimeoutSeconds -lt 1) { throw "StartupTimeoutSeconds deve essere almeno 1." }
 if ($PollIntervalSeconds -lt 1) { throw "PollIntervalSeconds deve essere almeno 1." }
-if ($RampUpSeconds -lt 0) { throw "RampUpSeconds non può essere negativo." }
 
-foreach ($requiredPath in @($JmxPath, $EnergiBridgeExe, $JMeterBat)) {
+$defaultRunsByScenario = @{
+    "load"   = 5
+    "stress" = 5
+    "spike"  = 5
+    "soak"   = 3
+}
+
+foreach ($requiredPath in @($EnergiBridgeExe, $JMeterBat)) {
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
         throw "File richiesto non trovato: '$requiredPath'."
     }
 }
+
+if (-not (Test-Path -LiteralPath $PlansDir -PathType Container)) {
+    throw "Cartella piani JMeter non trovata: '$PlansDir'."
+}
+
+$allJmxFiles = Get-ChildItem -Path $PlansDir -Filter "*_books.jmx" -File | Sort-Object Name
+if ($allJmxFiles.Count -eq 0) {
+    throw "Nessun file *_books.jmx trovato in '$PlansDir'."
+}
+
+$normalizedTypes = @($TestType | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ -ne "" })
+$normalizedExcludes = @($ExcludeTestType | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ -ne "" })
+
+if ($normalizedTypes -contains "all") {
+    $jmxFiles = $allJmxFiles
+} else {
+    $jmxFiles = @()
+    foreach ($t in $normalizedTypes) {
+        $planPath = Join-Path $PlansDir "${t}_books.jmx"
+        if (-not (Test-Path -LiteralPath $planPath -PathType Leaf)) {
+            throw "Piano JMeter non trovato per TestType='$t': '$planPath'."
+        }
+        $jmxFiles += Get-Item -LiteralPath $planPath
+    }
+}
+
+if ($normalizedExcludes.Count -gt 0) {
+    $jmxFiles = @($jmxFiles | Where-Object {
+        $typeName = ($_.BaseName -replace "_books$", "").ToLower()
+        $typeName -notin $normalizedExcludes
+    })
+}
+
+if ($jmxFiles.Count -eq 0) {
+    throw "Nessun piano JMeter rimasto da eseguire dopo l'applicazione dei filtri."
+}
+
+$selectedTestNames = @($jmxFiles | ForEach-Object { ($_.BaseName -replace "_books$", "").ToLower() })
+$selectedTestsLabel = $selectedTestNames -join ", "
 
 $targetUri = $null
 if (-not [System.Uri]::TryCreate($BaseUrl, [System.UriKind]::Absolute, [ref]$targetUri)) {
@@ -53,35 +102,17 @@ $jmeterTargetArgs = @(
     "-Jport=$($targetUri.Port)"
     "-Jprotocol=$($targetUri.Scheme)"
 )
-$jmeterLoadArgs = @(
-    "-Jthreads=$Threads"
-    "-Jloops=$Loops"
-    "-Jramp_time=$RampUpSeconds"
-)
 
 if (-not (Test-Path -LiteralPath $ResultsDir -PathType Container)) {
     New-Item -ItemType Directory -Path $ResultsDir -Force | Out-Null
 }
 
 if ($CleanPhase) {
-    Write-Host "=== Pulizia vecchi file per la fase '$Phase' ===" -ForegroundColor DarkGray
-    Get-ChildItem -Path $ResultsDir -Filter "*_${Phase}_*" -File | Remove-Item -Force
-}
-
-function Test-DockerDaemonHealthy {
-    $job = Start-Job -ScriptBlock {
-        docker info --format "{{.ServerVersion}}" 2>$null
-        return $LASTEXITCODE
+    foreach ($tName in $selectedTestNames) {
+        $cleanPattern = "*_${Phase}_${tName}_*"
+        Write-Host "=== Pulizia vecchi file ($cleanPattern) ===" -ForegroundColor DarkGray
+        Get-ChildItem -Path $ResultsDir -Filter $cleanPattern -File | Remove-Item -Force
     }
-    $completed = Wait-Job -Job $job -Timeout 10
-    if (-not $completed) {
-        Stop-Job -Job $job -ErrorAction SilentlyContinue
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-        return $false
-    }
-    $output = Receive-Job -Job $job
-    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-    return ($output -contains 0)
 }
 
 function Reset-DockerDesktop {
@@ -96,6 +127,13 @@ function Reset-DockerDesktop {
     $ErrorActionPreference = $prevErr
 
     Start-Sleep -Seconds 5
+
+    # Avvia il servizio Windows di Docker (dato che benchmark.ps1 gira da Admin, riesce sempre)
+    $dockerSvc = Get-Service -Name "com.docker.service" -ErrorAction SilentlyContinue
+    if ($dockerSvc -and $dockerSvc.Status -ne "Running") {
+        Start-Service -Name "com.docker.service" -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
 
     $dockerCli = Get-Command docker.exe -ErrorAction SilentlyContinue
     $candidates = @(
@@ -115,7 +153,7 @@ function Reset-DockerDesktop {
     }
 
     Write-Host "Avvio: $dockerExe" -ForegroundColor DarkGray
-    Start-Process -FilePath $dockerExe
+    Start-Process -FilePath "explorer.exe" -ArgumentList "`"$dockerExe`""
 
     $deadline = (Get-Date).AddSeconds(180)
     while ($true) {
@@ -286,13 +324,16 @@ $books = $testRes.Content | ConvertFrom-Json
 $payloadKb = [math]::Round($testRes.RawContentLength / 1KB, 2)
 Write-Host "Status: $($testRes.StatusCode) | Libri: $($books.Count) | Payload: $payloadKb KB | Latenza singola: $($sw.ElapsedMilliseconds) ms" -ForegroundColor Green
 
-Write-Host "`n=== [5/5] Esecuzione Benchmark ($Phase - $Runs run | $Threads thread x $Loops loop) ===" -ForegroundColor Cyan
-
+# Warm-up unico leggero (30s tramite load_books.jmx) prima di tutti gli scenari
 if (-not $SkipWarmup) {
-    Write-Host "Esecuzione warm-up JMeter (non misurato da EnergiBridge)..." -ForegroundColor Yellow
+    $warmupPlan = Join-Path $PlansDir "load_books.jmx"
+    if (-not (Test-Path -LiteralPath $warmupPlan -PathType Leaf)) {
+        $warmupPlan = $jmxFiles[0].FullName
+    }
+    Write-Host "`n=== Warm-up unico JVM / DB ($(Split-Path -Leaf $warmupPlan)) ===" -ForegroundColor Yellow
     $warmupTimestamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
     $warmupJtl = Join-Path $ResultsDir "warmup_${Phase}_${warmupTimestamp}.jtl"
-    & $JMeterBat -n -t $JmxPath "-Jjwt_token=$token" @jmeterTargetArgs @jmeterLoadArgs -l $warmupJtl | Out-Null
+    & $JMeterBat -n -t $warmupPlan "-Jjwt_token=$token" @jmeterTargetArgs -l $warmupJtl | Out-Null
     $warmupExitCode = $LASTEXITCODE
     if ($warmupExitCode -ne 0) {
         throw "Warm-up JMeter fallito con exit code $warmupExitCode."
@@ -304,95 +345,129 @@ if (-not $SkipWarmup) {
     Start-Sleep -Seconds $CooldownSeconds
 }
 
-if (-not (Get-Service -Name "rapl" -ErrorAction SilentlyContinue)) {
-    Write-Warning "Il servizio 'rapl' di energibridge non è installato. Script interrotto."
-    exit 1
+# Allineamento automatico percorso driver rapl + avvio servizio
+$driverPath = Join-Path (Split-Path -Parent $EnergiBridgeExe) "LibreHardwareMonitor.sys"
+if (Test-Path -LiteralPath $driverPath -PathType Leaf) {
+    sc.exe config rapl binPath= "$driverPath" | Out-Null
 }
-Write-Host "Starting EnergyBridge service (rapl)"
-sc.exe start rapl
 
-for ($i = 1; $i -le $Runs; $i++) {
-    $loginResponse = Invoke-RestMethod -Uri "$BaseUrl/api/v1/auth/login" -Method POST -ContentType "application/json" -Body $loginBody
-    $token = $loginResponse.accessToken
+$raplSvc = Get-Service -Name "rapl" -ErrorAction SilentlyContinue
+if (-not $raplSvc) {
+    throw "Il servizio 'rapl' di EnergiBridge non è installato."
+}
 
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
-    $ebCsv = Join-Path $ResultsDir "eb_${Phase}_run${i}_${timestamp}.csv"
-    $jmJtl = Join-Path $ResultsDir "jm_${Phase}_run${i}_${timestamp}.jtl"
+$raplSvc.Refresh()
+if ($raplSvc.Status -ne "Running") {
+    Write-Host "Avvio servizio EnergyBridge (rapl)..." -ForegroundColor Cyan
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $scOut = sc.exe start rapl 2>&1
+    $scExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevErr
 
-    Write-Host "`n--- Run $i di $Runs [$Phase] ---" -ForegroundColor Magenta
-    Write-Host "Output EnergiBridge: $ebCsv"
-    Write-Host "Output JMeter:       $jmJtl"
-
-
-
-    & $EnergiBridgeExe --interval 200 --output $ebCsv --summary `
-        $JMeterBat -n -t $JmxPath "-Jjwt_token=$token" @jmeterTargetArgs @jmeterLoadArgs -l $jmJtl
-    $benchmarkExitCode = $LASTEXITCODE
-    if ($benchmarkExitCode -ne 0) {
-        throw "EnergiBridge/JMeter fallito nella run $i con exit code $benchmarkExitCode. Output parziali mantenuti in $ResultsDir."
+    if ($scExit -ne 0 -and $scExit -ne 1056) {
+        throw "Impossibile avviare il servizio driver 'rapl' (exit $scExit): $($scOut -join ' ')"
     }
-    foreach ($outputPath in @($ebCsv, $jmJtl)) {
-        if (-not (Test-Path -LiteralPath $outputPath) -or (Get-Item -LiteralPath $outputPath).Length -eq 0) {
-            throw "Run $i incompleta: file mancante o vuoto '$outputPath'. Output parziali mantenuti in $ResultsDir."
+    Start-Sleep -Seconds 2
+}
+
+try {
+    foreach ($jmx in $jmxFiles) {
+        $currentTestType = ($jmx.BaseName -replace "_books$", "").ToLower()
+        $currentJmxPath = $jmx.FullName
+        $scenarioRuns = if ($Runs -gt 0) {
+            $Runs
+        } elseif ($defaultRunsByScenario.ContainsKey($currentTestType)) {
+            $defaultRunsByScenario[$currentTestType]
+        } else {
+            5
+        }
+
+        Write-Host "`n==================================================================" -ForegroundColor Cyan
+        Write-Host "=== [5/5] Esecuzione Benchmark [$Phase | $currentTestType] ($scenarioRuns run) ===" -ForegroundColor Cyan
+        Write-Host "==================================================================" -ForegroundColor Cyan
+
+        for ($i = 1; $i -le $scenarioRuns; $i++) {
+            $loginResponse = Invoke-RestMethod -Uri "$BaseUrl/api/v1/auth/login" -Method POST -ContentType "application/json" -Body $loginBody
+            $token = $loginResponse.accessToken
+
+            $timestamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
+            $ebCsv = Join-Path $ResultsDir "eb_${Phase}_${currentTestType}_run${i}_${timestamp}.csv"
+            $jmJtl = Join-Path $ResultsDir "jm_${Phase}_${currentTestType}_run${i}_${timestamp}.jtl"
+
+            Write-Host "`n--- Run $i di $scenarioRuns [$Phase | $currentTestType] ---" -ForegroundColor Magenta
+            Write-Host "Output EnergiBridge: $ebCsv"
+            Write-Host "Output JMeter:       $jmJtl"
+
+            & $EnergiBridgeExe --interval 200 --output $ebCsv --summary `
+                $JMeterBat -n -t $currentJmxPath "-Jjwt_token=$token" @jmeterTargetArgs -l $jmJtl
+            $benchmarkExitCode = $LASTEXITCODE
+            if ($benchmarkExitCode -ne 0) {
+                throw "EnergiBridge/JMeter fallito nella run $i [$currentTestType] con exit code $benchmarkExitCode. Output parziali mantenuti in $ResultsDir."
+            }
+            foreach ($outputPath in @($ebCsv, $jmJtl)) {
+                if (-not (Test-Path -LiteralPath $outputPath) -or (Get-Item -LiteralPath $outputPath).Length -eq 0) {
+                    throw "Run $i [$currentTestType] incompleta: file mancante o vuoto '$outputPath'. Output parziali mantenuti in $ResultsDir."
+                }
+            }
+
+            if ($i -lt $scenarioRuns) {
+                Write-Host "Cooldown di $CooldownSeconds secondi prima della prossima run..." -ForegroundColor DarkGray
+                Start-Sleep -Seconds $CooldownSeconds
+            }
+        }
+
+        if ($jmx -ne $jmxFiles[-1]) {
+            Write-Host "`nCooldown tra scenari di test ($CooldownSeconds s)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $CooldownSeconds
         }
     }
-
-    if ($i -lt $Runs) {
-        Write-Host "Cooldown di $CooldownSeconds secondi prima della prossima run..." -ForegroundColor DarkGray
-        Start-Sleep -Seconds $CooldownSeconds
+} finally {
+    Write-Host "`nArresto servizio EnergyBridge (rapl)..." -ForegroundColor DarkGray
+    sc.exe stop rapl | Out-Null
+    $svc = Get-Service -Name "rapl" -ErrorAction SilentlyContinue
+    if ($svc) {
+        try { $svc.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(10)) } catch {}
     }
 }
 
+Write-Host "`n=== Benchmark '$Phase' ($selectedTestsLabel) completato! Avvio configurazione ambiente Python... ===" -ForegroundColor Green
 
-Write-Host "`n=== Benchmark '$Phase' completato! Avvio configurazione ambiente Python... ===" -ForegroundColor Green
-
-# Directory dell'ambiente virtuale locale
 $VenvPath = Join-Path $PSScriptRoot ".venv"
 
-# Creazione ambiente virtuale se non esiste
 if (-not (Test-Path -LiteralPath $VenvPath -PathType Container)) {
     Write-Host "`n[1/4] Creazione ambiente virtuale Python..." -ForegroundColor Cyan
     python -m venv $VenvPath
-
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERRORE: impossibile creare il virtual environment." -ForegroundColor Red
         exit 1
     }
 }
 
-# Attivazione ambiente virtuale
 Write-Host "`n[2/4] Attivazione ambiente virtuale..." -ForegroundColor Cyan
-
 $ActivateScript = Join-Path $VenvPath "Scripts\Activate.ps1"
 . $ActivateScript
 
-# Aggiornamento pip
 Write-Host "`n[3/4] Aggiornamento pip e installazione dipendenze..." -ForegroundColor Cyan
-
 python -m pip install --upgrade pip
-
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRORE durante l'aggiornamento di pip." -ForegroundColor Red
     exit 1
 }
 
-# Installazione dipendenze
 python -m pip install pandas numpy
-
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRORE durante l'installazione delle dipendenze." -ForegroundColor Red
     exit 1
 }
 
-# Esecuzione script di analisi
 Write-Host "`n[4/4] Avvio analisi automatica..." -ForegroundColor Green
-
 if (Test-Path -LiteralPath $AnalyzeScript -PathType Leaf) {
     python $AnalyzeScript
-    Remove-Item -Path ".\results\*"
-
-}
-else {
+    if ($LASTEXITCODE -eq 0) {
+        Remove-Item -Path (Join-Path $ResultsDir "*") -Force
+    }
+} else {
     Write-Host "ERRORE: script di analisi non trovato: $AnalyzeScript" -ForegroundColor Red
     exit 1
 }
