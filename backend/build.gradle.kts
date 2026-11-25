@@ -12,7 +12,7 @@ plugins {
     id("io.spring.dependency-management") version "1.1.7"
     id("org.hibernate.orm") version "7.4.8.Final"
     id("com.github.ben-manes.versions") version "0.62.0"
-    id("me.champeau.jmh") version "0.7.3"
+    id("me.champeau.jmh") version "0.7.4"
     jacoco
 }
 
@@ -27,6 +27,24 @@ java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(25)
     }
+}
+
+jmh {
+    jmhVersion = "1.37"
+    warmupIterations = 3
+    iterations = 5
+    warmup = "2s"
+    timeOnIteration = "3s"
+    fork = 2
+    threads = 1
+    benchmarkMode = listOf("avgt")
+    timeUnit = "ms"
+    resultFormat = "JSON"
+    resultsFile = file(
+        "${layout.buildDirectory.get()}/reports/jmh/results.json"
+    )
+
+    includeTests = false
 }
 
 tasks.withType<JavaCompile>().configureEach {
