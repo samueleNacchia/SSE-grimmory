@@ -23,7 +23,7 @@ class BookQueryServiceTest {
         Shelf ownShelf = Shelf.builder().id(1L).userId(1L).publicShelf(false).build();
         Shelf otherPrivateShelf = Shelf.builder().id(2L).userId(2L).publicShelf(false).build();
         Shelf otherPublicShelf = Shelf.builder().id(3L).userId(2L).publicShelf(true).build();
-        when(bookMapperV2.toDTO(bookEntity)).thenReturn(Book.builder()
+        when(bookMapperV2.toDTO(bookEntity, false)).thenReturn(Book.builder()
                 .shelves(Set.of(ownShelf, otherPrivateShelf, otherPublicShelf))
                 .build());
 

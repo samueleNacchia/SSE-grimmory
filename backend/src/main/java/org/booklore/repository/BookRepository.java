@@ -122,6 +122,26 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     List<BookEntity> findAllWithMetadataByLibraryIds(@Param("libraryIds") Collection<Long> libraryIds);
 
     @EntityGraph(attributePaths = {
+            "metadata", "metadata.comicMetadata", "library",
+            "bookFiles", "shelves"
+    })
+    @Query("SELECT DISTINCT b FROM BookEntity b WHERE (b.deleted IS NULL OR b.deleted = false)")
+    List<BookEntity> findAllForListViewBase();
+
+    @EntityGraph(attributePaths = {
+            "metadata", "metadata.comicMetadata", "library",
+            "bookFiles", "shelves"
+    })
+    @Query("SELECT DISTINCT b FROM BookEntity b WHERE b.library.id IN :libraryIds AND (b.deleted IS NULL OR b.deleted = false)")
+    List<BookEntity> findAllForListViewBaseByLibraryIds(@Param("libraryIds") Collection<Long> libraryIds);
+
+    @EntityGraph(attributePaths = {
+            "metadata", "metadata.authors", "metadata.categories", "metadata.moods", "metadata.tags"
+    })
+    @Query("SELECT DISTINCT b FROM BookEntity b WHERE b.id IN :bookIds")
+    List<BookEntity> fetchMetadataCollectionsByBookIds(@Param("bookIds") Collection<Long> bookIds);
+
+    @EntityGraph(attributePaths = {
         "metadata", "metadata.comicMetadata",
         "metadata.comicMetadata.characters", "metadata.comicMetadata.teams", "metadata.comicMetadata.locations", "metadata.comicMetadata.creatorMappings",
         "metadata.authors", "metadata.categories", "metadata.moods", "metadata.tags",

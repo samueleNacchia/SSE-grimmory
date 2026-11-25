@@ -7,10 +7,15 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.Named;
 import org.mapstruct.ReportingPolicy;
+import org.mapstruct.BeanMapping;
+import org.mapstruct.Context;
+import org.mapstruct.MappingTarget;
+import org.mapstruct.AfterMapping;
 
 import java.util.Collections;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.HashSet;
 
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.IGNORE)
 public interface ComicMetadataMapper {
@@ -80,5 +85,51 @@ public interface ComicMetadataMapper {
                 .filter(m -> m.getRole() == role)
                 .map(m -> m.getCreator().getName())
                 .collect(Collectors.toSet());
+    }
+
+    @Named("toListViewComicMetadata")
+    @BeanMapping(ignoreByDefault = true)
+    @Mapping(target = "characters", source = "characters", qualifiedByName = "charactersToStrings")
+    @Mapping(target = "teams", source = "teams", qualifiedByName = "teamsToStrings")
+    @Mapping(target = "locations", source = "locations", qualifiedByName = "locationsToStrings")
+    ComicMetadata toListViewComicMetadata(ComicMetadataEntity entity);
+
+    @AfterMapping
+    default void mapCreatorsSinglePass(ComicMetadataEntity entity, @MappingTarget ComicMetadata target) {
+        Set<ComicCreatorMappingEntity> mappings = entity.getCreatorMappings();
+        if (mappings == null || mappings.isEmpty()) {
+            target.setPencillers(Collections.emptySet());
+            target.setInkers(Collections.emptySet());
+            target.setColorists(Collections.emptySet());
+            target.setLetterers(Collections.emptySet());
+            target.setCoverArtists(Collections.emptySet());
+            target.setEditors(Collections.emptySet());
+            return;
+        }
+        Set<String> pencillers = new HashSet<>();
+        Set<String> inkers = new HashSet<>();
+        Set<String> colorists = new HashSet<>();
+        Set<String> letterers = new HashSet<>();
+        Set<String> coverArtists = new HashSet<>();
+        Set<String> editors = new HashSet<>();
+
+        for (ComicCreatorMappingEntity m : mappings) {
+            if (m.getRole() == null || m.getCreator() == null) continue;
+            String name = m.getCreator().getName();
+            switch (m.getRole()) {
+                case PENCILLER -> pencillers.add(name);
+                case INKER -> inkers.add(name);
+                case COLORIST -> colorists.add(name);
+                case LETTERER -> letterers.add(name);
+                case COVER_ARTIST -> coverArtists.add(name);
+                case EDITOR -> editors.add(name);
+            }
+        }
+        target.setPencillers(pencillers);
+        target.setInkers(inkers);
+        target.setColorists(colorists);
+        target.setLetterers(letterers);
+        target.setCoverArtists(coverArtists);
+        target.setEditors(editors);
     }
 }
