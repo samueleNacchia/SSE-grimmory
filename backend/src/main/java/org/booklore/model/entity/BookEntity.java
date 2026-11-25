@@ -5,6 +5,7 @@ import lombok.*;
 import org.booklore.convertor.BookRecommendationIdsListConverter;
 import org.booklore.model.dto.BookRecommendationLite;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.config.BookCacheEvictionListener;
 import org.hibernate.Hibernate;
 import org.hibernate.annotations.BatchSize;
 import org.hibernate.annotations.LazyGroup;
@@ -20,6 +21,7 @@ import java.util.Objects;
 import java.util.Set;
 
 @Entity
+@EntityListeners(BookCacheEvictionListener.class)
 @Getter
 @Setter
 @Builder

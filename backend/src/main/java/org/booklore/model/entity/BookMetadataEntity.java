@@ -1,6 +1,7 @@
 package org.booklore.model.entity;
 
 import org.booklore.util.BookUtils;
+import org.booklore.config.BookCacheEvictionListener;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Set;
 
 @Entity
+@EntityListeners(BookCacheEvictionListener.class)
 @Getter
 @Setter
 @Builder

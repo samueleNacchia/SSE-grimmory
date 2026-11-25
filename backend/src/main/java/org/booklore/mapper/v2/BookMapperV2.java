@@ -11,11 +11,14 @@ import org.mapstruct.Mapping;
 import org.mapstruct.MappingTarget;
 import org.mapstruct.Named;
 import org.mapstruct.ReportingPolicy;
+import org.mapstruct.BeanMapping;
+import org.mapstruct.Context;
 
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.ArrayList;
 
 @Mapper(componentModel = "spring", uses = {ShelfMapper.class, ComicMetadataMapper.class}, unmappedTargetPolicy = ReportingPolicy.IGNORE)
 public interface BookMapperV2 {
@@ -27,7 +30,17 @@ public interface BookMapperV2 {
     @Mapping(source = "bookFiles", target = "alternativeFormats", qualifiedByName = "mapAlternativeFormats")
     @Mapping(source = "bookFiles", target = "supplementaryFiles", qualifiedByName = "mapSupplementaryFiles")
     @Mapping(target = "metadata", qualifiedByName = "mapMetadata")
-    Book toDTO(BookEntity bookEntity);
+    Book toDTO(BookEntity bookEntity, @Context boolean isListView);
+    default Book toDTO(BookEntity bookEntity) { return toDTO(bookEntity, false); }
+
+    @Mapping(source = "library.id", target = "libraryId")
+    @Mapping(source = "library.name", target = "libraryName")
+    @Mapping(target = "libraryPath", ignore = true)
+    @Mapping(target = "primaryFile", ignore = true)
+    @Mapping(target = "alternativeFormats", ignore = true)
+    @Mapping(target = "supplementaryFiles", ignore = true)
+    @Mapping(target = "metadata", qualifiedByName = "mapMetadataForListView")
+    Book toListViewDTO(BookEntity bookEntity, @Context boolean isListView);
 
     @Named("mapMetadata")
     @Mapping(target = "description", ignore = true)
@@ -38,8 +51,8 @@ public interface BookMapperV2 {
     BookMetadata mapMetadata(BookMetadataEntity metadataEntity);
 
     @AfterMapping
-    default void mapAudiobookMetadata(BookEntity bookEntity, @MappingTarget Book book) {
-        if (book.getMetadata() == null) {
+    default void mapAudiobookMetadata(BookEntity bookEntity, @MappingTarget Book book, @Context boolean isListView) {
+        if (isListView || book.getMetadata() == null) {
             return;
         }
 
@@ -203,5 +216,134 @@ public interface BookMapperV2 {
         return LibraryPath.builder()
                 .id(entity.getId())
                 .build();
+    }
+
+    @Named("mapMetadataForListView")
+    @BeanMapping(ignoreByDefault = true)
+    @Mapping(target = "bookId", source = "bookId")
+    @Mapping(target = "title", source = "title")
+    @Mapping(target = "publisher", source = "publisher")
+    @Mapping(target = "publishedDate", source = "publishedDate")
+    @Mapping(target = "seriesName", source = "seriesName")
+    @Mapping(target = "seriesNumber", source = "seriesNumber")
+    @Mapping(target = "isbn13", source = "isbn13")
+    @Mapping(target = "isbn10", source = "isbn10")
+    @Mapping(target = "pageCount", source = "pageCount")
+    @Mapping(target = "language", source = "language")
+    @Mapping(target = "amazonRating", source = "amazonRating")
+    @Mapping(target = "amazonReviewCount", source = "amazonReviewCount")
+    @Mapping(target = "goodreadsRating", source = "goodreadsRating")
+    @Mapping(target = "goodreadsReviewCount", source = "goodreadsReviewCount")
+    @Mapping(target = "hardcoverRating", source = "hardcoverRating")
+    @Mapping(target = "hardcoverReviewCount", source = "hardcoverReviewCount")
+    @Mapping(target = "ranobedbRating", source = "ranobedbRating")
+    @Mapping(target = "ageRating", source = "ageRating")
+    @Mapping(target = "contentRating", source = "contentRating")
+    @Mapping(target = "coverUpdatedOn", source = "coverUpdatedOn")
+    @Mapping(target = "narrator", source = "narrator")
+    @Mapping(target = "authors", source = "authors", qualifiedByName = "mapAuthorsNullable")
+    @Mapping(target = "categories", source = "categories", qualifiedByName = "mapCategoriesNullable")
+    @Mapping(target = "moods", source = "moods", qualifiedByName = "mapMoodsNullable")
+    @Mapping(target = "tags", source = "tags", qualifiedByName = "mapTagsNullable")
+    @Mapping(target = "comicMetadata", source = "comicMetadata", qualifiedByName = "toListViewComicMetadata")
+    BookMetadata mapMetadataForListView(BookMetadataEntity metadataEntity);
+
+    @Named("mapAuthorsNullable")
+    default List<String> mapAuthorsNullable(List<AuthorEntity> authors) {
+        if (authors == null || authors.isEmpty()) return null;
+        return authors.stream().map(AuthorEntity::getName).toList();
+    }
+
+    @Named("mapCategoriesNullable")
+    default Set<String> mapCategoriesNullable(Set<CategoryEntity> categories) {
+        if (categories == null || categories.isEmpty()) return null;
+        return categories.stream().map(CategoryEntity::getName).collect(Collectors.toSet());
+    }
+
+    @Named("mapMoodsNullable")
+    default Set<String> mapMoodsNullable(Set<MoodEntity> moods) {
+        if (moods == null || moods.isEmpty()) return null;
+        return moods.stream().map(MoodEntity::getName).collect(Collectors.toSet());
+    }
+
+    @Named("mapTagsNullable")
+    default Set<String> mapTagsNullable(Set<TagEntity> tags) {
+        if (tags == null || tags.isEmpty()) return null;
+        return tags.stream().map(TagEntity::getName).collect(Collectors.toSet());
+    }
+
+    @AfterMapping
+    default void mapFilesAndAudiobookSinglePass(BookEntity bookEntity, @MappingTarget Book book, @Context boolean isListView) {
+        if (!isListView) {
+            return;
+        }
+        Set<BookFileEntity> bookFiles = bookEntity.getBookFiles();
+        if (bookFiles == null || bookFiles.isEmpty()) {
+            return;
+        }
+
+        List<BookFileEntity> bookFormats = new ArrayList<>();
+        List<BookFile> supplementary = null;
+        BookFileEntity firstAudiobook = null;
+
+        for (BookFileEntity bf : bookFiles) {
+            if (bf.isBook()) {
+                bookFormats.add(bf);
+                if (bf.getBookType() == BookFileType.AUDIOBOOK &&
+                        (firstAudiobook == null || bf.getId() < firstAudiobook.getId())) {
+                    firstAudiobook = bf;
+                }
+            } else {
+                if (supplementary == null) supplementary = new ArrayList<>();
+                supplementary.add(toBookFile(bf));
+            }
+        }
+
+        if (!bookFormats.isEmpty()) {
+            bookFormats.sort(Comparator.comparingLong(BookFileEntity::getId));
+            BookFileEntity primary = bookFormats.getFirst();
+            LibraryEntity library = primary.getBook() != null ? primary.getBook().getLibrary() : null;
+
+            if (library != null && library.getFormatPriority() != null && !library.getFormatPriority().isEmpty()) {
+                outer:
+                for (BookFileType format : library.getFormatPriority()) {
+                    for (BookFileEntity bf : bookFormats) {
+                        if (bf.getBookType() == format) {
+                            primary = bf;
+                            break outer;
+                        }
+                    }
+                }
+            }
+
+            book.setPrimaryFile(toBookFile(primary));
+
+            if (bookFormats.size() > 1) {
+                List<BookFile> alternatives = new ArrayList<>(bookFormats.size() - 1);
+                for (BookFileEntity bf : bookFormats) {
+                    if (bf != primary) {
+                        alternatives.add(toBookFile(bf));
+                    }
+                }
+                book.setAlternativeFormats(alternatives);
+            }
+        }
+
+        if (supplementary != null && !supplementary.isEmpty()) {
+            book.setSupplementaryFiles(supplementary);
+        }
+
+        if (book.getMetadata() != null && firstAudiobook != null && firstAudiobook.getDurationSeconds() != null) {
+            book.getMetadata().setAudiobookMetadata(
+                    AudiobookMetadata.builder()
+                            .durationSeconds(firstAudiobook.getDurationSeconds())
+                            .bitrate(firstAudiobook.getBitrate())
+                            .sampleRate(firstAudiobook.getSampleRate())
+                            .channels(firstAudiobook.getChannels())
+                            .codec(firstAudiobook.getCodec())
+                            .chapterCount(firstAudiobook.getChapterCount())
+                            .build()
+            );
+        }
     }
 }
