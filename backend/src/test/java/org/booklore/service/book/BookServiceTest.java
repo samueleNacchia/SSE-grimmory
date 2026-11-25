@@ -273,8 +273,8 @@ class BookServiceTest {
 
     @Test
     void getBookThumbnail_fileExists_returnsUrlResource() throws Exception {
-        when(fileService.getThumbnailFile(1L)).thenReturn("/tmp/cover.jpg");
-        Path path = Paths.get("/tmp/cover.jpg");
+        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "cover.jpg");
+        when(fileService.getThumbnailFile(1L)).thenReturn(path.toString());
         Files.createFile(path);
         try {
             Resource res = bookService.getBookThumbnail(1L);

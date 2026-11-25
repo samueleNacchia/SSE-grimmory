@@ -4,6 +4,7 @@ import jakarta.persistence.EntityManager;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.config.security.service.AuthenticationService;
+import org.booklore.config.BookCacheEvictionListener;
 import org.booklore.exception.ApiError;
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.*;
@@ -448,6 +449,7 @@ public class BookService {
         entityManager.clear();
 
         bookRepository.deleteAllInBatch(books);
+        BookCacheEvictionListener.evictBooksListView();
 
         auditService.log(AuditAction.BOOK_DELETED, "Deleted " + ids.size() + " book(s)");
         BookDeletionResponse response = new BookDeletionResponse(ids, failedFileDeletions);
