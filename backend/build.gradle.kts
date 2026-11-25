@@ -33,17 +33,15 @@ jmh {
     jmhVersion = "1.37"
     warmupIterations = 3
     iterations = 5
-    warmup = "2s"
-    timeOnIteration = "3s"
-    fork = 2
+    warmup = "3s"
+    timeOnIteration = "5s"
+    fork = 1
     threads = 1
-    benchmarkMode = listOf("avgt")
     timeUnit = "ms"
     resultFormat = "JSON"
     resultsFile = file(
         "${layout.buildDirectory.get()}/reports/jmh/results.json"
     )
-
     includeTests = false
 }
 
