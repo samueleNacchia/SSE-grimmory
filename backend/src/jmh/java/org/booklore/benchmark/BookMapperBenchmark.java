@@ -101,13 +101,12 @@ public class BookMapperBenchmark {
         }
     }
 
-    // --- BASELINE: mapping completo toDTO(bookEntity) ---
     @Benchmark
-    public void baselineFullDtoMapping(Blackhole bh) {
+    public void improvementsListViewDtoMapping(Blackhole bh) {
         int size = bookEntities.size();
         List<Book> result = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
-            result.add(mapper.toDTO(bookEntities.get(i)));
+            result.add(mapper.toListViewDTO(bookEntities.get(i), true));
         }
         bh.consume(result);
     }

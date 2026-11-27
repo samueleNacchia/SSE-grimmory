@@ -1,5 +1,7 @@
 package org.booklore.benchmark;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.booklore.model.dto.Book;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.Shelf;
@@ -9,11 +11,10 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.time.Duration;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.Deflater;
 import java.util.zip.GZIPOutputStream;
 
 @State(Scope.Benchmark)
@@ -21,11 +22,21 @@ import java.util.zip.GZIPOutputStream;
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 public class BookControllerSerializationBenchmark {
 
+    private record CacheKey(Long userId, boolean withDescription, boolean stripForListView) {}
+    private record CachedJsonResponse(byte[] plainBody, byte[] gzipBody, String eTag) {}
+
     private List<Book> books;
     private ObjectMapper objectMapper;
+    private Cache<Object, CachedJsonResponse> jsonCache;
+    private Long userId;
+    private boolean withDescription;
+    private boolean stripForListView;
 
     @Setup(Level.Trial)
-    public void setup() {
+    public void setup() throws IOException {
+        userId = 1L;
+        withDescription = false;
+        stripForListView = true;
         objectMapper = new ObjectMapper();
 
         books = new ArrayList<>(1000);
@@ -51,19 +62,44 @@ public class BookControllerSerializationBenchmark {
 
             books.add(book);
         }
-    }
 
-    // --- BASELINE: serializzazione Jackson + GZIP ad ogni richiesta HTTP ---
-    @Benchmark
-    public void baselineSerializationAndGzip(Blackhole bh) throws IOException {
+        jsonCache = Caffeine.newBuilder()
+                .maximumSize(200)
+                .expireAfterWrite(Duration.ofMinutes(10))
+                .build();
+
+        // Pre-popola la cache per il benchmark di Cache Hit
         byte[] jsonBytes = objectMapper.writeValueAsBytes(books);
-        byte[] gzipBytes = compressGzipDefault(jsonBytes);
-        bh.consume(gzipBytes);
+        byte[] gzipBytes = compressGzipFast(jsonBytes);
+        String eTag = "\"books-" + Integer.toHexString(Arrays.hashCode(jsonBytes)) + "\"";
+        jsonCache.put(new CacheKey(userId, withDescription, stripForListView),
+                new CachedJsonResponse(jsonBytes, gzipBytes, eTag));
     }
 
-    private static byte[] compressGzipDefault(byte[] data) throws IOException {
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream(data.length / 4);
-             GZIPOutputStream gzipOut = new GZIPOutputStream(baos)) {
+    // --- IMPROVEMENTS (Cache Hit): lookup Caffeine + byte[] GZIP già pronti ---
+    @Benchmark
+    public void improvementsCachedJsonHit(Blackhole bh) {
+        CacheKey key = new CacheKey(userId, withDescription, stripForListView);
+        CachedJsonResponse cached = jsonCache.getIfPresent(key);
+        bh.consume(cached.gzipBody());
+        bh.consume(cached.eTag());
+    }
+
+    // --- IMPROVEMENTS (Cache Miss): serializzazione + GZIP BEST_SPEED + ETag ---
+    @Benchmark
+    public void improvementsCacheMissBuild(Blackhole bh) throws IOException {
+        byte[] jsonBytes = objectMapper.writeValueAsBytes(books);
+        byte[] gzipBytes = compressGzipFast(jsonBytes);
+        String eTag = "\"books-" + Integer.toHexString(Arrays.hashCode(jsonBytes)) + "\"";
+        CachedJsonResponse entry = new CachedJsonResponse(jsonBytes, gzipBytes, eTag);
+        bh.consume(entry);
+    }
+
+    private static byte[] compressGzipFast(byte[] data) throws IOException {
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream(Math.max(256, data.length / 6));
+             GZIPOutputStream gzipOut = new GZIPOutputStream(baos) {
+                 { def.setLevel(Deflater.BEST_SPEED); }
+             }) {
             gzipOut.write(data);
             gzipOut.finish();
             return baos.toByteArray();

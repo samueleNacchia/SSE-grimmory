@@ -87,11 +87,14 @@ public class BookController {
     private final CacheManager cacheManager;
     private final AuthenticationService authenticationService;
 
+    private record CacheKey(Long userId, boolean withDescription, boolean stripForListView) {}
     private record CachedJsonResponse(byte[] plainBody, byte[] gzipBody, String eTag) {}
 
     private static byte[] compressGzip(byte[] data) throws IOException {
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream(data.length / 4);
-             GZIPOutputStream gzipOut = new GZIPOutputStream(baos)) {
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream(Math.max(256, data.length / 6));
+             GZIPOutputStream gzipOut = new GZIPOutputStream(baos) {
+                 { def.setLevel(java.util.zip.Deflater.BEST_SPEED); }
+             }) {
             gzipOut.write(data);
             gzipOut.finish();
             return baos.toByteArray();

@@ -28,48 +28,68 @@ public class BookQueryStripBenchmark {
         }
     }
 
-    // --- BASELINE: alloca Boolean[51] per ognuno dei 1000 libri ---
+    // --- IMPROVEMENTS: short-circuit && senza alcuna allocazione ---
     @Benchmark
-    public void baselineComputeAllMetadataLocked(Blackhole bh) {
+    public void improvementsComputeAllMetadataLocked(Blackhole bh) {
         int lockedCount = 0;
         for (int i = 0; i < metadataList.size(); i++) {
-            if (computeAllMetadataLockedBaseline(metadataList.get(i))) {
+            if (computeAllMetadataLockedImprovements(metadataList.get(i))) {
                 lockedCount++;
             }
         }
         bh.consume(lockedCount);
     }
 
-    private boolean computeAllMetadataLockedBaseline(BookMetadata m) {
-        Boolean[] bookLocks = {
-                m.getTitleLocked(), m.getSubtitleLocked(), m.getPublisherLocked(),
-                m.getPublishedDateLocked(), m.getDescriptionLocked(), m.getSeriesNameLocked(),
-                m.getSeriesNumberLocked(), m.getSeriesTotalLocked(), m.getIsbn13Locked(),
-                m.getIsbn10Locked(), m.getOpenlibraryIdLocked(), m.getAsinLocked(), m.getGoodreadsIdLocked(),
-                m.getComicvineIdLocked(), m.getHardcoverIdLocked(), m.getHardcoverBookIdLocked(),
-                m.getDoubanIdLocked(), m.getGoogleIdLocked(), m.getPageCountLocked(),
-                m.getLanguageLocked(), m.getAmazonRatingLocked(), m.getAmazonReviewCountLocked(),
-                m.getGoodreadsRatingLocked(), m.getGoodreadsReviewCountLocked(),
-                m.getHardcoverRatingLocked(), m.getHardcoverReviewCountLocked(),
-                m.getDoubanRatingLocked(), m.getDoubanReviewCountLocked(),
-                m.getLubimyczytacIdLocked(), m.getLubimyczytacRatingLocked(),
-                m.getRanobedbIdLocked(), m.getRanobedbRatingLocked(),
-                m.getAudibleIdLocked(), m.getAudibleRatingLocked(), m.getAudibleReviewCountLocked(),
-                m.getApplebooksIdLocked(), m.getApplebooksRatingLocked(), m.getApplebooksReviewCountLocked(),
-                m.getExternalUrlLocked(), m.getCoverLocked(), m.getAudiobookCoverLocked(),
-                m.getAuthorsLocked(), m.getCategoriesLocked(), m.getMoodsLocked(),
-                m.getTagsLocked(), m.getReviewsLocked(), m.getNarratorLocked(),
-                m.getAbridgedLocked(), m.getAgeRatingLocked(), m.getContentRatingLocked()
-        };
-
-        boolean hasAnyLock = false;
-        for (Boolean lock : bookLocks) {
-            if (Boolean.TRUE.equals(lock)) {
-                hasAnyLock = true;
-            } else {
-                return false;
-            }
-        }
-        return hasAnyLock;
+    private boolean computeAllMetadataLockedImprovements(BookMetadata m) {
+        return Boolean.TRUE.equals(m.getTitleLocked())
+                && Boolean.TRUE.equals(m.getSubtitleLocked())
+                && Boolean.TRUE.equals(m.getPublisherLocked())
+                && Boolean.TRUE.equals(m.getPublishedDateLocked())
+                && Boolean.TRUE.equals(m.getDescriptionLocked())
+                && Boolean.TRUE.equals(m.getSeriesNameLocked())
+                && Boolean.TRUE.equals(m.getSeriesNumberLocked())
+                && Boolean.TRUE.equals(m.getSeriesTotalLocked())
+                && Boolean.TRUE.equals(m.getIsbn13Locked())
+                && Boolean.TRUE.equals(m.getIsbn10Locked())
+                && Boolean.TRUE.equals(m.getOpenlibraryIdLocked())
+                && Boolean.TRUE.equals(m.getAsinLocked())
+                && Boolean.TRUE.equals(m.getGoodreadsIdLocked())
+                && Boolean.TRUE.equals(m.getComicvineIdLocked())
+                && Boolean.TRUE.equals(m.getHardcoverIdLocked())
+                && Boolean.TRUE.equals(m.getHardcoverBookIdLocked())
+                && Boolean.TRUE.equals(m.getDoubanIdLocked())
+                && Boolean.TRUE.equals(m.getGoogleIdLocked())
+                && Boolean.TRUE.equals(m.getPageCountLocked())
+                && Boolean.TRUE.equals(m.getLanguageLocked())
+                && Boolean.TRUE.equals(m.getAmazonRatingLocked())
+                && Boolean.TRUE.equals(m.getAmazonReviewCountLocked())
+                && Boolean.TRUE.equals(m.getGoodreadsRatingLocked())
+                && Boolean.TRUE.equals(m.getGoodreadsReviewCountLocked())
+                && Boolean.TRUE.equals(m.getHardcoverRatingLocked())
+                && Boolean.TRUE.equals(m.getHardcoverReviewCountLocked())
+                && Boolean.TRUE.equals(m.getDoubanRatingLocked())
+                && Boolean.TRUE.equals(m.getDoubanReviewCountLocked())
+                && Boolean.TRUE.equals(m.getLubimyczytacIdLocked())
+                && Boolean.TRUE.equals(m.getLubimyczytacRatingLocked())
+                && Boolean.TRUE.equals(m.getRanobedbIdLocked())
+                && Boolean.TRUE.equals(m.getRanobedbRatingLocked())
+                && Boolean.TRUE.equals(m.getAudibleIdLocked())
+                && Boolean.TRUE.equals(m.getAudibleRatingLocked())
+                && Boolean.TRUE.equals(m.getAudibleReviewCountLocked())
+                && Boolean.TRUE.equals(m.getApplebooksIdLocked())
+                && Boolean.TRUE.equals(m.getApplebooksRatingLocked())
+                && Boolean.TRUE.equals(m.getApplebooksReviewCountLocked())
+                && Boolean.TRUE.equals(m.getExternalUrlLocked())
+                && Boolean.TRUE.equals(m.getCoverLocked())
+                && Boolean.TRUE.equals(m.getAudiobookCoverLocked())
+                && Boolean.TRUE.equals(m.getAuthorsLocked())
+                && Boolean.TRUE.equals(m.getCategoriesLocked())
+                && Boolean.TRUE.equals(m.getMoodsLocked())
+                && Boolean.TRUE.equals(m.getTagsLocked())
+                && Boolean.TRUE.equals(m.getReviewsLocked())
+                && Boolean.TRUE.equals(m.getNarratorLocked())
+                && Boolean.TRUE.equals(m.getAbridgedLocked())
+                && Boolean.TRUE.equals(m.getAgeRatingLocked())
+                && Boolean.TRUE.equals(m.getContentRatingLocked());
     }
 }

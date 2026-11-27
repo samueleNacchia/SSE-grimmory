@@ -76,7 +76,7 @@ public class ComicMetadataMapperBenchmark {
         int size = comicEntities.size();
         List<ComicMetadata> result = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
-            result.add(mapper.toComicMetadata(comicEntities.get(i)));
+            result.add(mapper.toListViewComicMetadata(comicEntities.get(i)));
         }
         bh.consume(result);
     }

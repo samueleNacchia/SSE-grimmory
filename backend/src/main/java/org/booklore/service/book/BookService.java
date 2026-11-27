@@ -23,8 +23,6 @@ import org.booklore.service.progress.ReadingProgressService;
 import org.booklore.util.BookUtils;
 import org.booklore.util.FileService;
 import org.booklore.util.FileUtils;
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
@@ -37,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,7 +43,6 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.stream.Collectors;
-import java.io.InputStream;
 
 @Slf4j
 @AllArgsConstructor
@@ -72,7 +70,6 @@ public class BookService {
     private final FileStreamingService fileStreamingService;
     private final AuditService auditService;
 
-
     public List<Book> getBookDTOs(boolean includeDescription, boolean stripForListView) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
         boolean isAdmin = user.getPermissions().isAdmin();
@@ -86,23 +83,49 @@ public class BookService {
                 user.getId()
         );
 
-        Set<Long> bookIds = books.stream().map(Book::getId).collect(Collectors.toSet());
+        int size = books.size();
+        Set<Long> bookIds = HashSet.newHashSet(size);
+        for (int i = 0; i < size; i++) {
+            bookIds.add(books.get(i).getId());
+        }
+
         Map<Long, UserBookProgressEntity> progressMap =
                 readingProgressService.fetchUserProgress(user.getId(), bookIds);
         Map<Long, UserBookFileProgressEntity> fileProgressMap =
                 readingProgressService.fetchUserFileProgress(user.getId(), bookIds);
 
-        books.forEach(book -> {
+        Long userId = user.getId();
+        List<Book> result = new ArrayList<>(size);
+
+        for (int i = 0; i < size; i++) {
+            Book cachedBook = books.get(i);
+            Book book = cachedBook.toBuilder().build();
+            Long id = book.getId();
             readingProgressService.enrichBookWithProgress(
                     book,
-                    progressMap.get(book.getId()),
-                    fileProgressMap.get(book.getId())
+                    progressMap.get(id),
+                    fileProgressMap.get(id)
             );
-            Set<Shelf> filtered = filterShelvesByUserId(book.getShelves(), user.getId());
-            book.setShelves(!includeDescription && filtered != null && filtered.isEmpty() ? null : filtered);
-        });
 
-        return books;
+            Set<Shelf> rawShelves = cachedBook.getShelves();
+            if (rawShelves == null || rawShelves.isEmpty()) {
+                book.setShelves(includeDescription ? Collections.emptySet() : null);
+            } else {
+                Set<Shelf> filtered = null;
+                for (Shelf shelf : rawShelves) {
+                    if (userId.equals(shelf.getUserId())) {
+                        if (filtered == null) {
+                            filtered = HashSet.newHashSet(rawShelves.size());
+                        }
+                        filtered.add(shelf);
+                    }
+                }
+                book.setShelves(!includeDescription && filtered == null ? null : filtered);
+            }
+            result.add(book);
+        }
+
+        return result;
     }
 
     public Page<Book> getBookDTOsPaged(Pageable pageable) {
@@ -141,6 +164,7 @@ public class BookService {
                 .map(Library::getId)
                 .collect(Collectors.toSet());
     }
+
     public List<Book> getBooksByIds(Set<Long> bookIds, boolean withDescription) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
         boolean isAdmin = user.getPermissions().isAdmin();
@@ -180,7 +204,6 @@ public class BookService {
         UserBookProgressEntity userProgress = userBookProgressRepository.findByUserIdAndBookId(user.getId(), bookId)
                 .orElse(new UserBookProgressEntity());
 
-        // Fetch file-level progress for the book (most recent across all files)
         UserBookFileProgressEntity fileProgress = readingProgressService
                 .fetchUserFileProgress(user.getId(), Set.of(bookId))
                 .get(bookId);
@@ -195,7 +218,6 @@ public class BookService {
 
         return book;
     }
-
 
     public BookViewerSettings getBookViewerSetting(long bookId, long bookFileId) {
         BookEntity bookEntity = bookRepository.findByIdWithBookFiles(bookId).orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
@@ -411,7 +433,6 @@ public class BookService {
                             log.warn("Failed to unregister monitoring for path: {}", fullFilePath.getParent(), ex);
                         }
 
-                        // Handle folder-based audiobooks (delete directory recursively)
                         if (bookFile.isFolderBased() && Files.isDirectory(fullFilePath)) {
                             deleteDirectoryRecursively(fullFilePath);
                             log.info("Deleted folder-based audiobook: {}", fullFilePath);
@@ -443,8 +464,6 @@ public class BookService {
             }
         }
 
-        // Because this is `InBatch` we need to clear and flush the entity manager to
-        // prevent unexpected updates of records when the transaction commits.
         entityManager.flush();
         entityManager.clear();
 
@@ -537,5 +556,4 @@ public class BookService {
     public Set<Shelf> filterShelvesByUserId(Set<Shelf> shelves, Long userId) {
         return BookUtils.filterShelvesByUserId(shelves, userId);
     }
-
 }

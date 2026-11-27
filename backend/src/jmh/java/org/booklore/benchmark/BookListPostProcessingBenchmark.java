@@ -4,18 +4,11 @@ import org.booklore.model.dto.Book;
 import org.booklore.model.dto.Shelf;
 import org.booklore.model.entity.UserBookFileProgressEntity;
 import org.booklore.model.entity.UserBookProgressEntity;
-import org.booklore.util.BookUtils;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
@@ -60,22 +53,44 @@ public class BookListPostProcessingBenchmark {
         }
     }
 
-    // --- BASELINE: codice attuale in BookService.getBookDTOs ---
+    // --- IMPROVEMENTS: pre-sizing + ciclo diretto + shallow copy cache-safe ---
     @Benchmark
-    public void baselinePostProcessing(Blackhole bh) {
-        Set<Long> bookIds = books.stream().map(Book::getId).collect(Collectors.toSet());
+    public void improvementsPostProcessing(Blackhole bh) {
+        int size = books.size();
+        Set<Long> bookIds = HashSet.newHashSet(size);
+        List<Book> result = new ArrayList<>(size);
 
-        books.forEach(book -> {
-            UserBookProgressEntity up = progressMap.get(book.getId());
-            UserBookFileProgressEntity fp = fileProgressMap.get(book.getId());
+        for (int i = 0; i < size; i++) {
+            Book cachedBook = books.get(i);
+            Book book = cachedBook.toBuilder().build();
+            Long id = book.getId();
+            bookIds.add(id);
+
+            UserBookProgressEntity up = progressMap.get(id);
+            UserBookFileProgressEntity fp = fileProgressMap.get(id);
             if (up != null || fp != null) {
                 bh.consume(up);
             }
-            Set<Shelf> filtered = BookUtils.filterShelvesByUserId(book.getShelves(), userId);
-            book.setShelves(!includeDescription && filtered != null && filtered.isEmpty() ? null : filtered);
-        });
+
+            Set<Shelf> rawShelves = cachedBook.getShelves();
+            if (rawShelves == null || rawShelves.isEmpty()) {
+                book.setShelves(includeDescription ? Collections.emptySet() : null);
+            } else {
+                Set<Shelf> filtered = null;
+                for (Shelf shelf : rawShelves) {
+                    if (userId.equals(shelf.getUserId())) {
+                        if (filtered == null) {
+                            filtered = HashSet.newHashSet(rawShelves.size());
+                        }
+                        filtered.add(shelf);
+                    }
+                }
+                book.setShelves(!includeDescription && filtered == null ? null : filtered);
+            }
+            result.add(book);
+        }
 
         bh.consume(bookIds);
-        bh.consume(books);
+        bh.consume(result);
     }
 }
