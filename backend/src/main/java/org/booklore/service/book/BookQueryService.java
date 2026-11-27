@@ -188,9 +188,12 @@ public class BookQueryService {
     }
 
     private List<Book> mapBooksToDto(List<BookEntity> books, boolean includeDescription, Long userId, boolean stripForListView) {
-        return books.stream()
-                .map(book -> mapBookToDto(book, includeDescription, userId, stripForListView))
-                .toList();
+        int size = books.size();
+        List<Book> result = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            result.add(mapBookToDto(books.get(i), includeDescription, userId, stripForListView));
+        }
+        return result;
     }
 
     private Book mapBookToDto(BookEntity bookEntity, boolean includeDescription, Long userId, boolean stripForListView) {
@@ -202,9 +205,6 @@ public class BookQueryService {
                     dto.getMetadata().setDescription(me.getDescription());
                 }
                 dto.getMetadata().setAllMetadataLocked(computeAllMetadataLockedFromEntity(me));
-            }
-            if (dto.getShelves() != null && userId != null) {
-                dto.setShelves(BookUtils.filterShelvesByUserId(dto.getShelves(), userId));
             }
             return dto;
         }
