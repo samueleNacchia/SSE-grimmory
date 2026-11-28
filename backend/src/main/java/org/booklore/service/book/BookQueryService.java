@@ -84,7 +84,7 @@ public class BookQueryService {
         return findBooksPaged(visibleBooks(libraryIds, userId), pageable, userId);
     }
 
-    private Specification<BookEntity> distinct(Specification<BookEntity> filter) {
+    private static Specification<BookEntity> distinct(Specification<BookEntity> filter) {
         return (root, query, cb) -> {
             // We need to query distinct because otherwise the `JOIN` + `LIMIT` cause the page sizes to be wrong.
             //
@@ -162,19 +162,19 @@ public class BookQueryService {
         List<BookEntity> books = bookRepository.findAllWithMetadataByIds(new HashSet<>(embeddingJsonByBookId.keySet()));
         for (BookEntity book : books) {
             String embeddingJson = embeddingJsonByBookId.get(book.getId());
-            if (embeddingJson != null && book.getMetadata() != null) {
-                if (!Objects.equals(book.getMetadata().getEmbeddingVector(), embeddingJson)) {
+            if (embeddingJson != null && book.getMetadata() != null && !Objects.equals(book.getMetadata().getEmbeddingVector(), embeddingJson)) {
                     book.getMetadata().setEmbeddingVector(embeddingJson);
                     book.getMetadata().setEmbeddingUpdatedAt(Instant.now());
                 }
-            }
+
         }
     }
 
     @Transactional
     public void saveRecommendationsInBatches(Map<Long, Set<BookRecommendationLite>> recommendations, int batchSize) {
         List<Long> bookIds = new ArrayList<>(recommendations.keySet());
-        for (int i = 0; i < bookIds.size(); i += batchSize) {
+        int bookIdsSize = bookIds.size();
+        for (int i = 0; i < bookIdsSize; i += batchSize) {
             List<Long> batchIds = bookIds.subList(i, Math.min(i + batchSize, bookIds.size()));
             List<BookEntity> batch = bookRepository.findAllById(batchIds);
             for (BookEntity book : batch) {
@@ -222,7 +222,7 @@ public class BookQueryService {
         return dto;
     }
 
-    private boolean computeAllMetadataLockedFromEntity(BookMetadataEntity m) {
+    private static boolean computeAllMetadataLockedFromEntity(BookMetadataEntity m) {
         return Boolean.TRUE.equals(m.getTitleLocked())
                 && Boolean.TRUE.equals(m.getSubtitleLocked())
                 && Boolean.TRUE.equals(m.getPublisherLocked())
@@ -271,7 +271,7 @@ public class BookQueryService {
                 && Boolean.TRUE.equals(m.getContentRatingLocked());
     }
 
-    private void stripFieldsForListView(Book dto) {
+    private static void stripFieldsForListView(Book dto) {
         dto.setLibraryPath(null);
 
         BookMetadata m = dto.getMetadata();
@@ -424,7 +424,7 @@ public class BookQueryService {
         if (dto.getSupplementaryFiles() != null && dto.getSupplementaryFiles().isEmpty()) dto.setSupplementaryFiles(null);
     }
 
-    private boolean computeAllMetadataLocked(BookMetadata m) {
+    private static boolean computeAllMetadataLocked(BookMetadata m) {
         Boolean[] bookLocks = {
                 m.getTitleLocked(), m.getSubtitleLocked(), m.getPublisherLocked(),
                 m.getPublishedDateLocked(), m.getDescriptionLocked(), m.getSeriesNameLocked(),

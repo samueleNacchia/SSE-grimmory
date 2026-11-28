@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.ArrayList;
+import java.util.Collections;
 
 @Mapper(componentModel = "spring", uses = {ShelfMapper.class, ComicMetadataMapper.class}, unmappedTargetPolicy = ReportingPolicy.IGNORE)
 public interface BookMapperV2 {
@@ -133,7 +134,7 @@ public interface BookMapperV2 {
 
     @Named("mapAlternativeFormats")
     default List<BookFile> mapAlternativeFormats(Set<BookFileEntity> bookFiles) {
-        if (bookFiles == null) return null;
+        if (bookFiles == null) return Collections.emptyList();
         BookFileEntity primary = getPrimaryBookFile(bookFiles);
         return bookFiles.stream()
                 .filter(BookFileEntity::isBook)
@@ -145,7 +146,7 @@ public interface BookMapperV2 {
 
     @Named("mapSupplementaryFiles")
     default List<BookFile> mapSupplementaryFiles(Set<BookFileEntity> bookFiles) {
-        if (bookFiles == null) return null;
+        if (bookFiles == null) return Collections.emptyList();
         return bookFiles.stream()
                 .filter(bf -> !bf.isBook())
                 .map(this::toBookFile)
@@ -250,25 +251,25 @@ public interface BookMapperV2 {
 
     @Named("mapAuthorsNullable")
     default List<String> mapAuthorsNullable(List<AuthorEntity> authors) {
-        if (authors == null || authors.isEmpty()) return null;
+        if (authors == null || authors.isEmpty()) return Collections.emptyList();
         return authors.stream().map(AuthorEntity::getName).toList();
     }
 
     @Named("mapCategoriesNullable")
     default Set<String> mapCategoriesNullable(Set<CategoryEntity> categories) {
-        if (categories == null || categories.isEmpty()) return null;
+        if (categories == null || categories.isEmpty()) return Collections.emptySet();
         return categories.stream().map(CategoryEntity::getName).collect(Collectors.toSet());
     }
 
     @Named("mapMoodsNullable")
     default Set<String> mapMoodsNullable(Set<MoodEntity> moods) {
-        if (moods == null || moods.isEmpty()) return null;
+        if (moods == null || moods.isEmpty()) return Collections.emptySet();
         return moods.stream().map(MoodEntity::getName).collect(Collectors.toSet());
     }
 
     @Named("mapTagsNullable")
     default Set<String> mapTagsNullable(Set<TagEntity> tags) {
-        if (tags == null || tags.isEmpty()) return null;
+        if (tags == null || tags.isEmpty()) return Collections.emptySet();
         return tags.stream().map(TagEntity::getName).collect(Collectors.toSet());
     }
 

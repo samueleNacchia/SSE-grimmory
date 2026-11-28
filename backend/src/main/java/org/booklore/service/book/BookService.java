@@ -159,7 +159,7 @@ public class BookService {
         return bookPage;
     }
 
-    private Set<Long> getUserLibraryIds(BookLoreUser user) {
+    private static Set<Long> getUserLibraryIds(BookLoreUser user) {
         return user.getAssignedLibraries().stream()
                 .map(Library::getId)
                 .collect(Collectors.toSet());
@@ -201,8 +201,9 @@ public class BookService {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
         BookEntity bookEntity = bookRepository.findByIdWithBookFiles(bookId).orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
 
-        UserBookProgressEntity userProgress = userBookProgressRepository.findByUserIdAndBookId(user.getId(), bookId)
-                .orElse(new UserBookProgressEntity());
+        UserBookProgressEntity userProgress = userBookProgressRepository
+                .findByUserIdAndBookId(user.getId(), bookId)
+                .orElseGet(UserBookProgressEntity::new);
 
         UserBookFileProgressEntity fileProgress = readingProgressService
                 .fetchUserFileProgress(user.getId(), Set.of(bookId))
@@ -220,7 +221,8 @@ public class BookService {
     }
 
     public BookViewerSettings getBookViewerSetting(long bookId, long bookFileId) {
-        BookEntity bookEntity = bookRepository.findByIdWithBookFiles(bookId).orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
+        BookEntity bookEntity = bookRepository.findByIdWithBookFiles(bookId)
+                .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
         BookLoreUser user = authenticationService.getAuthenticatedUser();
 
         BookViewerSettings.BookViewerSettingsBuilder settingsBuilder = BookViewerSettings.builder();
@@ -229,57 +231,61 @@ public class BookService {
                 .filter(bf -> bf.getId().equals(bookFileId))
                 .findFirst()
                 .orElseThrow(() -> ApiError.FILE_NOT_FOUND.createException("Book file not found: " + bookFileId));
+
         BookFileType bookType = bookFile.getBookType();
-        if (bookType == BookFileType.EPUB || bookType == BookFileType.FB2
-                || bookType == BookFileType.MOBI
-                || bookType == BookFileType.AZW3) {
-            ebookViewerPreferencesRepository.findByBookIdAndUserId(bookId, user.getId())
-                    .ifPresent(epubPref -> settingsBuilder.ebookSettings(EbookViewerPreferences.builder()
-                            .bookId(bookId)
-                            .userId(user.getId())
-                            .fontFamily(epubPref.getFontFamily())
-                            .fontSize(epubPref.getFontSize())
-                            .gap(epubPref.getGap())
-                            .hyphenate(epubPref.getHyphenate())
-                            .isDark(epubPref.getIsDark())
-                            .justify(epubPref.getJustify())
-                            .lineHeight(epubPref.getLineHeight())
-                            .maxBlockSize(epubPref.getMaxBlockSize())
-                            .maxColumnCount(epubPref.getMaxColumnCount())
-                            .maxInlineSize(epubPref.getMaxInlineSize())
-                            .theme(epubPref.getTheme())
-                            .flow(epubPref.getFlow())
-                            .build()));
-        } else if (bookType == BookFileType.PDF) {
-            pdfViewerPreferencesRepository.findByBookIdAndUserId(bookId, user.getId())
-                    .ifPresent(pdfPref -> settingsBuilder.pdfSettings(PdfViewerPreferences.builder()
-                            .bookId(bookId)
-                            .zoom(pdfPref.getZoom())
-                            .spread(pdfPref.getSpread())
-                            .isDarkTheme(pdfPref.getIsDarkTheme())
-                            .build()));
-            newPdfViewerPreferencesRepository.findByBookIdAndUserId(bookId, user.getId())
-                    .ifPresent(pdfPref -> settingsBuilder.newPdfSettings(NewPdfViewerPreferences.builder()
-                            .bookId(bookId)
-                            .pageViewMode(pdfPref.getPageViewMode())
-                            .pageSpread(pdfPref.getPageSpread())
-                            .fitMode(pdfPref.getFitMode())
-                            .scrollMode(pdfPref.getScrollMode())
-                            .backgroundColor(pdfPref.getBackgroundColor())
-                            .build()));
-        } else if (bookType == BookFileType.CBX) {
-            cbxViewerPreferencesRepository.findByBookIdAndUserId(bookId, user.getId())
-                    .ifPresent(cbxPref -> settingsBuilder.cbxSettings(CbxViewerPreferences.builder()
-                            .bookId(bookId)
-                            .pageViewMode(cbxPref.getPageViewMode())
-                            .pageSpread(cbxPref.getPageSpread())
-                            .fitMode(cbxPref.getFitMode())
-                            .scrollMode(cbxPref.getScrollMode())
-                            .backgroundColor(cbxPref.getBackgroundColor())
-                            .build()));
-        } else {
-            throw ApiError.UNSUPPORTED_BOOK_TYPE.createException();
+        switch (bookType) {
+            case EPUB, FB2, MOBI, AZW3 ->
+                    ebookViewerPreferencesRepository.findByBookIdAndUserId(bookId, user.getId())
+                            .ifPresent(epubPref -> settingsBuilder.ebookSettings(EbookViewerPreferences.builder()
+                                    .bookId(bookId)
+                                    .userId(user.getId())
+                                    .fontFamily(epubPref.getFontFamily())
+                                    .fontSize(epubPref.getFontSize())
+                                    .gap(epubPref.getGap())
+                                    .hyphenate(epubPref.getHyphenate())
+                                    .isDark(epubPref.getIsDark())
+                                    .justify(epubPref.getJustify())
+                                    .lineHeight(epubPref.getLineHeight())
+                                    .maxBlockSize(epubPref.getMaxBlockSize())
+                                    .maxColumnCount(epubPref.getMaxColumnCount())
+                                    .maxInlineSize(epubPref.getMaxInlineSize())
+                                    .theme(epubPref.getTheme())
+                                    .flow(epubPref.getFlow())
+                                    .build()));
+
+            case PDF -> {
+                pdfViewerPreferencesRepository.findByBookIdAndUserId(bookId, user.getId())
+                        .ifPresent(pdfPref -> settingsBuilder.pdfSettings(PdfViewerPreferences.builder()
+                                .bookId(bookId)
+                                .zoom(pdfPref.getZoom())
+                                .spread(pdfPref.getSpread())
+                                .isDarkTheme(pdfPref.getIsDarkTheme())
+                                .build()));
+                newPdfViewerPreferencesRepository.findByBookIdAndUserId(bookId, user.getId())
+                        .ifPresent(pdfPref -> settingsBuilder.newPdfSettings(NewPdfViewerPreferences.builder()
+                                .bookId(bookId)
+                                .pageViewMode(pdfPref.getPageViewMode())
+                                .pageSpread(pdfPref.getPageSpread())
+                                .fitMode(pdfPref.getFitMode())
+                                .scrollMode(pdfPref.getScrollMode())
+                                .backgroundColor(pdfPref.getBackgroundColor())
+                                .build()));
+            }
+
+            case CBX ->
+                    cbxViewerPreferencesRepository.findByBookIdAndUserId(bookId, user.getId())
+                            .ifPresent(cbxPref -> settingsBuilder.cbxSettings(CbxViewerPreferences.builder()
+                                    .bookId(bookId)
+                                    .pageViewMode(cbxPref.getPageViewMode())
+                                    .pageSpread(cbxPref.getPageSpread())
+                                    .fitMode(cbxPref.getFitMode())
+                                    .scrollMode(cbxPref.getScrollMode())
+                                    .backgroundColor(cbxPref.getBackgroundColor())
+                                    .build()));
+
+            case null, default -> throw ApiError.UNSUPPORTED_BOOK_TYPE.createException();
         }
+
         return settingsBuilder.build();
     }
 
@@ -477,7 +483,7 @@ public class BookService {
                 : ResponseEntity.status(HttpStatus.MULTI_STATUS).body(response);
     }
 
-    private void deleteDirectoryRecursively(Path path) throws IOException {
+    private static void deleteDirectoryRecursively(Path path) throws IOException {
         if (!Files.exists(path)) return;
 
         try (var walk = Files.walk(path)) {
@@ -505,7 +511,7 @@ public class BookService {
                         isLibraryRoot = true;
                         break;
                     }
-                } catch (IOException e) {
+                } catch (IOException _) {
                     log.warn("Failed to compare paths: {} and {}", root, dir);
                 }
             }
@@ -534,7 +540,7 @@ public class BookService {
                     try {
                         Files.delete(file.toPath());
                         log.info("Deleted ignored file: {}", file.getAbsolutePath());
-                    } catch (IOException e) {
+                    } catch (IOException _) {
                         log.warn("Failed to delete ignored file: {}", file.getAbsolutePath());
                     }
                 }

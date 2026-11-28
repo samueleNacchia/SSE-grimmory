@@ -38,3 +38,6 @@ out/
 
 ### Local scripts ###
 local/
+
+#### sonarlint
+.sonar/

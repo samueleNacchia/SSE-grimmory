@@ -45,7 +45,7 @@ public class BookDownloadServiceTest {
     private MockedStatic<Files> mockFiles;
 
     @BeforeEach
-    public void setup() throws Exception {
+    void setup() {
         mockFiles = mockStatic(Files.class);
     }
 
@@ -56,7 +56,7 @@ public class BookDownloadServiceTest {
 
     @Test
     @EnabledOnOs(OS.LINUX)
-    public void downloadBook_includesContentDispositionAscii() {
+    void downloadBook_includesContentDispositionAscii() {
         String expected = "attachment; filename=\"example.epub\"";
 
         BookEntity bookEntity = getSampleBook("example.epub");
@@ -74,7 +74,7 @@ public class BookDownloadServiceTest {
 
     @Test
     @EnabledOnOs(OS.LINUX)
-    public void downloadBook_includesContentDispositionUTF8() {
+    void downloadBook_includesContentDispositionUTF8() {
         String expected = "attachment; filename=\"_xample.epub\"; filename*=UTF-8''%C9%87xample.epub";
 
         BookEntity bookEntity = getSampleBook("ɇxample.epub");

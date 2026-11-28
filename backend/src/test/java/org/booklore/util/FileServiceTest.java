@@ -18,7 +18,6 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.client.RestClient;
 
@@ -1269,7 +1268,7 @@ class FileServiceTest {
 
             @Test
             @DisplayName("throws exception when response body is null")
-            void downloadImageFromUrl_nullBody_throwsException() throws Exception {
+            void downloadImageFromUrl_nullBody_throwsException() {
                 String imageUrl = "http://1.1.1.1/image.jpg";
 
                 mockRestClient(imageUrl, null);
@@ -1280,7 +1279,7 @@ class FileServiceTest {
 
             @Test
             @DisplayName("throws IOException when ImageIO cannot read bytes")
-            void downloadImageFromUrl_invalidImageData_throwsException() throws IOException {
+            void downloadImageFromUrl_invalidImageData_throwsException() {
                 String imageUrl = "http://1.1.1.1/image.jpg";
                 byte[] invalidBytes = "not an image".getBytes();
 
@@ -1318,7 +1317,7 @@ class FileServiceTest {
 
             @Test
             @DisplayName("throws ApiError.FILE_READ_ERROR on download failure")
-            void createThumbnailFromUrl_downloadFails_throwsApiError() throws Exception {
+            void createThumbnailFromUrl_downloadFails_throwsApiError() {
                 String imageUrl = "http://example.com/invalid.jpg";
                 long bookId = 42L;
 

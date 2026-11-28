@@ -439,7 +439,7 @@ class LibraryFileHelperTest {
 
         List<Long> actual = libraryFileHelper.detectDeletedBookIds(Collections.emptyList(), List.of(book));
 
-        assertThat(actual).hasSize(0);
+        assertThat(actual).isEmpty();
     }
 
     @Test
@@ -452,7 +452,7 @@ class LibraryFileHelperTest {
 
         List<Long> actual = libraryFileHelper.detectDeletedBookIds(Collections.emptyList(), List.of(book));
 
-        assertThat(actual).hasSize(0);
+        assertThat(actual).isEmpty();
     }
 
     @Test
@@ -487,7 +487,7 @@ class LibraryFileHelperTest {
                 List.of(book)
         );
 
-        assertThat(actual).hasSize(0);
+        assertThat(actual).isEmpty();
     }
 
     @Test
@@ -714,7 +714,7 @@ class LibraryFileHelperTest {
                 List.of(additionalFile)
         );
 
-        assertThat(actual).hasSize(0);
+        assertThat(actual).isEmpty();
     }
 
     @Test
